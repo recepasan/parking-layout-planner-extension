@@ -336,7 +336,8 @@ function computeBestLayout(polygon, mpp, opts) {
     const bounds = _polyBounds(rpoly);
     const spanX = bounds.maxX - bounds.minX;
     const spanY = bounds.maxY - bounds.minY;
-    const minEdgeLen = Math.max(sw * 6, Math.min(spanX, spanY) * 0.5);
+    // Eğik kenarlar dahil yeterince uzun tüm kenarlara çevre bayı dene.
+    const minEdgeLen = sw * 4;
     for (let i = 0; i < rpoly.length; i++) {
       const a = rpoly[i], b = rpoly[(i + 1) % rpoly.length];
       const dx = b.x - a.x, dy = b.y - a.y;
@@ -344,8 +345,6 @@ function computeBestLayout(polygon, mpp, opts) {
       if (len < minEdgeLen) continue;
 
       const ux = dx / len, uy = dy / len;
-      const axisAligned = Math.abs(ux) > 0.9 || Math.abs(uy) > 0.9;
-      if (!axisAligned) continue;
       const normals = [
         { x: -uy, y: ux },
         { x: uy, y: -ux },

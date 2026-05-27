@@ -209,34 +209,60 @@
     return lPx * mppFromCam(cam);
   }
 
-  function classifyStalls(stallsPx) {
+  function classifyStalls(stallsPx, angleDeg) {
+    const n = stallsPx.length;
     const types = stallsPx.map(() => "standard");
-    const centers = stallsPx.map((st, index) => ({ index, c: centroid(st) }));
-    const ordered = centers.slice().sort((a, b) => a.c.y - b.c.y || a.c.x - b.c.x);
+    if (!n || !cam) return types;
 
-    for (let i = 8; i < ordered.length; i += 18) types[ordered[i].index] = "landscape";
-    for (let i = 14; i < ordered.length; i += 28) types[ordered[i].index] = "landscape";
-
-    const gatePts = gatesLL.map((g) => ll2px(g.ll, cam));
-    const accessibleOrder = centers.slice().sort((a, b) => {
-      const da = gatePts.length ? Math.min(...gatePts.map((p) => Math.hypot(a.c.x - p.x, a.c.y - p.y))) : a.c.y;
-      const db = gatePts.length ? Math.min(...gatePts.map((p) => Math.hypot(b.c.x - p.x, b.c.y - p.y))) : b.c.y;
-      return da - db;
+    // Bayları, yerleşim açısına göre döndürülmüş çerçevede konumlandır.
+    const ang = -((angleDeg || 0) * Math.PI) / 180;
+    const cos = Math.cos(ang), sin = Math.sin(ang);
+    const info = stallsPx.map((st, index) => {
+      const c = centroid(st);
+      return { index, c, rx: c.x * cos - c.y * sin, ry: c.x * sin + c.y * cos };
     });
-    for (const item of accessibleOrder.slice(0, Math.min(6, Math.ceil(stallsPx.length * 0.06)))) {
-      if (types[item.index] !== "landscape") types[item.index] = "accessible";
+
+    // 1) Sıralara böl (döndürülmüş ry'ye göre) ve peyzaj adalarını
+    //    rastgele değil, uzun sıraların UÇLARINA yerleştir.
+    const pxPerM = 1 / mppFromCam(cam);
+    const rowTol = (parseFloat($("#opl-sd").value) || 5) * pxPerM * 0.6;
+    const sorted = info.slice().sort((a, b) => a.ry - b.ry || a.rx - b.rx);
+    const rows = [];
+    let cur = [];
+    for (const it of sorted) {
+      if (cur.length && it.ry - cur[cur.length - 1].ry > rowTol) { rows.push(cur); cur = []; }
+      cur.push(it);
+    }
+    if (cur.length) rows.push(cur);
+    for (const row of rows) {
+      row.sort((a, b) => a.rx - b.rx);
+      if (row.length >= 10) {
+        types[row[0].index] = "landscape";
+        types[row[row.length - 1].index] = "landscape";
+      }
+      if (row.length >= 24) types[row[Math.floor(row.length / 2)].index] = "landscape";
     }
 
-    const evOrder = centers.slice().sort((a, b) => b.c.x - a.c.x || a.c.y - b.c.y);
-    let evCount = 0;
-    const evTarget = Math.min(14, Math.max(4, Math.ceil(stallsPx.length * 0.08)));
-    for (const item of evOrder) {
-      if (evCount >= evTarget) break;
-      if (types[item.index] === "standard") {
-        types[item.index] = "ev";
-        evCount++;
-      }
+    // 2) Engelli baylar: girişe (yoksa lotun ön kenarına) en yakın bitişik blok.
+    const entry = gatesLL.find((g) => g.type === "entry") || gatesLL[0];
+    const frontBay = info.reduce((m, it) => (it.ry < m.ry ? it : m), info[0]);
+    const accAnchor = entry ? ll2px(entry.ll, cam) : frontBay.c;
+    // EV baylar: çıkışa (yoksa karşı kenara) yakın ayrı bir blok.
+    const exit = gatesLL.find((g) => g.type === "exit");
+    const sideBay = info.reduce((m, it) => (it.rx > m.rx ? it : m), info[0]);
+    const evAnchor = exit ? ll2px(exit.ll, cam) : sideBay.c;
+
+    function tagNearest(anchor, count, type) {
+      const cand = info
+        .filter((it) => types[it.index] === "standard")
+        .sort((a, b) =>
+          Math.hypot(a.c.x - anchor.x, a.c.y - anchor.y) -
+          Math.hypot(b.c.x - anchor.x, b.c.y - anchor.y));
+      for (const it of cand.slice(0, count)) types[it.index] = type;
     }
+    tagNearest(accAnchor, Math.min(8, Math.max(4, Math.ceil(n * 0.04))), "accessible");
+    tagNearest(evAnchor, Math.min(12, Math.max(4, Math.ceil(n * 0.06))), "ev");
+
     return types;
   }
 
@@ -296,11 +322,12 @@
       ctx.fill();
       ctx.restore();
     }
+    // Tek yönlü akış: komşu koridorlarda yön dönüşümlü (boustrophedon).
+    const reverse = (index % 2) === 1;
     for (let i = 1; i <= arrows; i++) {
       const t = i / (arrows + 1);
       const x = m1.x + dx * t, y = m1.y + dy * t;
-      arrowHead(x + ux * 8, y + uy * 8, angle);
-      arrowHead(x - ux * 8, y - uy * 8, angle + Math.PI);
+      arrowHead(x, y, reverse ? angle + Math.PI : angle);
     }
 
     const label = `${aisleWidthM(a).toFixed(1)} m`;
@@ -380,9 +407,50 @@
     }
   }
 
+  function segNearest(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+    return { x: a.x + dx * t, y: a.y + dy * t };
+  }
+
+  // Kapıyı en yakın sürüş koridoruna bağlayan erişim yolu + yön oku.
+  function drawGateAccess(gate, g) {
+    if (!aislesLL.length) return;
+    let best = null;
+    for (const aLL of aislesLL) {
+      const a = aLL.map((ll) => ll2px(ll, cam));
+      const m1 = { x: (a[0].x + a[3].x) / 2, y: (a[0].y + a[3].y) / 2 };
+      const m2 = { x: (a[1].x + a[2].x) / 2, y: (a[1].y + a[2].y) / 2 };
+      const np = segNearest(g, m1, m2);
+      const d = dist(g, np);
+      const w = (dist(a[0], a[3]) + dist(a[1], a[2])) / 2;
+      if (!best || d < best.d) best = { d, np, w };
+    }
+    if (!best) return;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(119,128,136,0.9)";
+    ctx.lineWidth = Math.max(8, best.w * 0.9);
+    ctx.beginPath();
+    ctx.moveTo(g.x, g.y);
+    ctx.lineTo(best.np.x, best.np.y);
+    ctx.stroke();
+    const ang = Math.atan2(best.np.y - g.y, best.np.x - g.x);
+    const into = gate.type === "entry";
+    ctx.translate(into ? best.np.x : g.x, into ? best.np.y : g.y);
+    ctx.rotate(into ? ang : ang + Math.PI);
+    ctx.fillStyle = "rgba(255,235,120,0.95)";
+    ctx.beginPath();
+    ctx.moveTo(9, 0); ctx.lineTo(-6, -5); ctx.lineTo(-6, 5); ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   function drawGate(gate) {
     const p = ll2px(gate.ll, cam);
     const color = gate.type === "entry" ? "#22c55e" : "#ef4444";
+    drawGateAccess(gate, p);
     ctx.save();
     ctx.beginPath();
     ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
@@ -554,7 +622,7 @@
     if (!r) { toast("Hesaplanamadı."); return; }
     // Park yerlerini coğrafi koordinata çevirerek sakla (sabitleme için)
     stallsLL = r.stalls.map((st) => st.map((p) => px2ll(p.x, p.y, cam)));
-    stallTypes = classifyStalls(r.stalls);
+    stallTypes = classifyStalls(r.stalls, r.angleDeg);
     aislesLL = r.aisles.map((a) => a.map((p) => px2ll(p.x, p.y, cam)));
     const effectiveCount = parkingCount();
     result = { count: effectiveCount, angleDeg: r.angleDeg, areaM2: r.areaM2 };
