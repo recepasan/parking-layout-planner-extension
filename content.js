@@ -20,6 +20,9 @@
   let cursor = null;        // imleç (ekran px)
   let cam = null;           // { lat, lng, zoom }
   let roadDrag = null;      // { type, index, corner, edge, start:{x,y}, original:[{lat,lng}*4] }
+  let aislesEdited = false; // yollar elle düzenlendi mi? (Hesapla'da sabit tut)
+  let lastAngleDeg = 0;     // son tam optimizasyonun yön açısı (sınıflandırma için)
+  let aisleSegsCache = [];  // koridor merkez çizgileri (bay'ın açık kenarını bulmak için)
   // canlı kaydırma için
   let dragging = false, dragStart = null, dragDelta = { x: 0, y: 0 };
   let lastPointer = { x: 0, y: 0 };
@@ -199,8 +202,10 @@
 
   function aisleWidthM(a) {
     if (!cam) return 0;
-    const wPx = (dist(a[0], a[3]) + dist(a[1], a[2])) / 2;
-    return wPx * mppFromCam(cam);
+    // Gerçek genişlik = kısa kenar (dikey/yatay koridor fark etmez).
+    const s1 = (dist(a[0], a[1]) + dist(a[2], a[3])) / 2;
+    const s2 = (dist(a[0], a[3]) + dist(a[1], a[2])) / 2;
+    return Math.min(s1, s2) * mppFromCam(cam);
   }
 
   function aisleLengthM(a) {
@@ -215,18 +220,23 @@
     if (!n || !cam) return types;
 
     // Bayları, yerleşim açısına göre döndürülmüş çerçevede konumlandır.
+    // "aligned": iç (eksene hizalı) baylar; "değil": eğik kenar bayları.
     const ang = -((angleDeg || 0) * Math.PI) / 180;
     const cos = Math.cos(ang), sin = Math.sin(ang);
+    const layoutRad = ((angleDeg || 0) * Math.PI) / 180;
     const info = stallsPx.map((st, index) => {
       const c = centroid(st);
-      return { index, c, rx: c.x * cos - c.y * sin, ry: c.x * sin + c.y * cos };
+      const e = Math.atan2(st[1].y - st[0].y, st[1].x - st[0].x);
+      let d = Math.abs((e - layoutRad) % (Math.PI / 2));
+      if (d > Math.PI / 4) d = Math.PI / 2 - d;
+      return { index, c, rx: c.x * cos - c.y * sin, ry: c.x * sin + c.y * cos, aligned: d < 0.2 };
     });
 
     // 1) Sıralara böl (döndürülmüş ry'ye göre) ve peyzaj adalarını
     //    rastgele değil, uzun sıraların UÇLARINA yerleştir.
     const pxPerM = 1 / mppFromCam(cam);
     const rowTol = (parseFloat($("#opl-sd").value) || 5) * pxPerM * 0.6;
-    const sorted = info.slice().sort((a, b) => a.ry - b.ry || a.rx - b.rx);
+    const sorted = info.filter((it) => it.aligned).sort((a, b) => a.ry - b.ry || a.rx - b.rx);
     const rows = [];
     let cur = [];
     for (const it of sorted) {
@@ -254,7 +264,7 @@
 
     function tagNearest(anchor, count, type) {
       const cand = info
-        .filter((it) => types[it.index] === "standard")
+        .filter((it) => it.aligned && types[it.index] === "standard")
         .sort((a, b) =>
           Math.hypot(a.c.x - anchor.x, a.c.y - anchor.y) -
           Math.hypot(b.c.x - anchor.x, b.c.y - anchor.y));
@@ -292,9 +302,17 @@
     ctx.strokeStyle = "rgba(255,255,255,0.45)";
     ctx.lineWidth = 1;
     ctx.stroke();
-    // orta çizgi (kesikli): kısa kenarların orta noktaları arası
-    const m1 = { x: (a[0].x + a[3].x) / 2, y: (a[0].y + a[3].y) / 2 };
-    const m2 = { x: (a[1].x + a[2].x) / 2, y: (a[1].y + a[2].y) / 2 };
+    // orta çizgi (kesikli): koridorun UZUN ekseni boyunca (yatay/dikey fark etmez)
+    const side01 = (dist(a[0], a[1]) + dist(a[3], a[2])) / 2;
+    const side03 = (dist(a[0], a[3]) + dist(a[1], a[2])) / 2;
+    let m1, m2;
+    if (side01 >= side03) {
+      m1 = { x: (a[0].x + a[3].x) / 2, y: (a[0].y + a[3].y) / 2 };
+      m2 = { x: (a[1].x + a[2].x) / 2, y: (a[1].y + a[2].y) / 2 };
+    } else {
+      m1 = { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2 };
+      m2 = { x: (a[3].x + a[2].x) / 2, y: (a[3].y + a[2].y) / 2 };
+    }
     ctx.beginPath();
     ctx.moveTo(m1.x, m1.y);
     ctx.lineTo(m2.x, m2.y);
@@ -306,46 +324,50 @@
 
     const dx = m2.x - m1.x, dy = m2.y - m1.y;
     const len = Math.hypot(dx, dy);
+    const lenM = len * mppFromCam(cam); // koridorun uzunluğu (metre)
     const angle = Math.atan2(dy, dx);
-    const arrows = Math.max(1, Math.floor(len / 120));
-    const ux = len ? dx / len : 0, uy = len ? dy / len : 0;
-    ctx.fillStyle = "rgba(255,235,120,0.78)";
-    function arrowHead(x, y, rot) {
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(rot);
-      ctx.beginPath();
-      ctx.moveTo(7, 0);
-      ctx.lineTo(-5, -4);
-      ctx.lineTo(-5, 4);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
-    // Tek yönlü akış: komşu koridorlarda yön dönüşümlü (boustrophedon).
-    const reverse = (index % 2) === 1;
-    for (let i = 1; i <= arrows; i++) {
-      const t = i / (arrows + 1);
-      const x = m1.x + dx * t, y = m1.y + dy * t;
-      arrowHead(x, y, reverse ? angle + Math.PI : angle);
+
+    // Oklar yalnızca yeterince uzun koridorlarda (kalabalığı önlemek için).
+    if (lenM > 9) {
+      const arrows = Math.max(1, Math.floor(len / 120));
+      ctx.fillStyle = "rgba(255,235,120,0.78)";
+      const reverse = (index % 2) === 1; // tek yönlü akış, komşuda ters
+      for (let i = 1; i <= arrows; i++) {
+        const t = i / (arrows + 1);
+        const x = m1.x + dx * t, y = m1.y + dy * t;
+        const rot = reverse ? angle + Math.PI : angle;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rot);
+        ctx.beginPath();
+        ctx.moveTo(7, 0);
+        ctx.lineTo(-5, -4);
+        ctx.lineTo(-5, 4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
     }
 
-    const label = `${aisleWidthM(a).toFixed(1)} m`;
-    const lc = centroid(a);
-    ctx.save();
-    ctx.translate(lc.x, lc.y);
-    ctx.rotate(angle);
-    ctx.font = "700 10px -apple-system, Segoe UI, Roboto, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const tw = ctx.measureText(label).width + 12;
-    ctx.fillStyle = "rgba(20,22,28,0.58)";
-    ctx.beginPath();
-    ctx.roundRect(-tw / 2, -10, tw, 20, 5);
-    ctx.fill();
-    ctx.fillStyle = "rgba(254,243,199,0.92)";
-    ctx.fillText(label, 0, 0);
-    ctx.restore();
+    // Ölçü etiketi yalnızca uzun koridorlarda.
+    if (lenM > 12) {
+      const label = `${aisleWidthM(a).toFixed(1)} m`;
+      const lc = centroid(a);
+      ctx.save();
+      ctx.translate(lc.x, lc.y);
+      ctx.rotate(angle);
+      ctx.font = "700 10px -apple-system, Segoe UI, Roboto, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const tw = ctx.measureText(label).width + 12;
+      ctx.fillStyle = "rgba(20,22,28,0.58)";
+      ctx.beginPath();
+      ctx.roundRect(-tw / 2, -10, tw, 20, 5);
+      ctx.fill();
+      ctx.fillStyle = "rgba(254,243,199,0.92)";
+      ctx.fillText(label, 0, 0);
+      ctx.restore();
+    }
 
     if (mode === "road") {
       ctx.fillStyle = "rgba(250,204,21,0.95)";
@@ -367,39 +389,60 @@
     }
   }
 
-  // Tek bir park cebini plan stiliyle çizer.
+  // Tek bir park cebini plan stiliyle (ince beyaz çizgi) çizer.
   function drawBay(st, type) {
     let cx = 0, cy = 0;
     for (const p of st) { cx += p.x; cy += p.y; }
     cx /= 4; cy /= 4;
-    const k = type === "landscape" ? 0.86 : 1.0;
-    const pts = st.map((p) => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k }));
-    ctx.beginPath();
-    pts.forEach((p, i) => {
-      i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y);
-    });
-    ctx.closePath();
-    ctx.fillStyle = {
-      accessible: "rgba(37,99,235,0.78)",
-      ev: "rgba(34,197,94,0.7)",
-      landscape: "rgba(101,163,13,0.82)",
-      standard: "rgba(120,128,136,0.18)",
-    }[type || "standard"];
-    ctx.fill();
-    ctx.strokeStyle = type === "landscape" ? "rgba(236,252,203,0.9)" : "rgba(255,255,255,0.92)";
-    ctx.lineWidth = type === "landscape" ? 1 : 1.35;
-    ctx.stroke();
 
     if (type === "landscape") {
+      // Sıra ucu peyzaj/ağaç adası: yalnızca yeşil daire (referanstaki gibi).
+      const r = Math.max(4, Math.min(9, Math.hypot(st[1].x - st[0].x, st[1].y - st[0].y) * 0.45));
       ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(4, Math.min(8, Math.hypot(st[1].x - st[0].x, st[1].y - st[0].y) * 0.22)), 0, Math.PI * 2);
-      ctx.fillStyle = "#15803d";
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(34,139,58,0.92)";
       ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.75)";
+      ctx.strokeStyle = "rgba(20,60,30,0.55)";
       ctx.lineWidth = 1;
       ctx.stroke();
-    } else if (type === "accessible") {
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      return;
+    }
+
+    // Dolgu (yalnızca engelli/EV) — önce kapalı yolu doldur.
+    if (type === "accessible" || type === "ev") {
+      ctx.beginPath();
+      st.forEach((p, i) => { i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.closePath();
+      ctx.fillStyle = type === "accessible" ? "rgba(37,99,235,0.82)" : "rgba(34,197,94,0.78)";
+      ctx.fill();
+    }
+
+    // Tarak stili: koridora bakan kenarı AÇIK bırak, diğer 3 kenarı çiz.
+    let open = -1, bestD = Infinity;
+    for (let i = 0; i < 4 && aisleSegsCache.length; i++) {
+      const a = st[i], b = st[(i + 1) % 4];
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      for (const seg of aisleSegsCache) {
+        const np = segNearest(mid, seg.m1, seg.m2);
+        const d = Math.hypot(mid.x - np.x, mid.y - np.y);
+        if (d < bestD) { bestD = d; open = i; }
+      }
+    }
+    ctx.strokeStyle = "rgba(255,255,255,0.72)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (open >= 0) {
+      let idx = (open + 1) % 4;
+      ctx.moveTo(st[idx].x, st[idx].y);
+      for (let k = 0; k < 3; k++) { idx = (idx + 1) % 4; ctx.lineTo(st[idx].x, st[idx].y); }
+    } else {
+      st.forEach((p, i) => { i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.closePath();
+    }
+    ctx.stroke();
+
+    if (type === "accessible") {
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
       ctx.font = "700 9px -apple-system, Segoe UI, Roboto, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -476,6 +519,15 @@
   function redraw() {
     ctx.clearRect(0, 0, innerWidth, innerHeight);
     if (!cam) return;
+    // Koridor merkez çizgilerini (uzun eksen) bir kez hesapla → bay'ların açık kenarı.
+    aisleSegsCache = aislesLL.map((aLL) => {
+      const a = aLL.map((ll) => ll2px(ll, cam));
+      const s01 = dist(a[0], a[1]) + dist(a[3], a[2]);
+      const s03 = dist(a[0], a[3]) + dist(a[1], a[2]);
+      return s01 >= s03
+        ? { m1: { x: (a[0].x + a[3].x) / 2, y: (a[0].y + a[3].y) / 2 }, m2: { x: (a[1].x + a[2].x) / 2, y: (a[1].y + a[2].y) / 2 } }
+        : { m1: { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2 }, m2: { x: (a[3].x + a[2].x) / 2, y: (a[3].y + a[2].y) / 2 } };
+    });
 
     // Tamamlanmış alan: asfalt zemin + park cepleri (alanla kırpılmış)
     if (closed && polygonLL.length >= 3) {
@@ -539,6 +591,7 @@
   function startDraw() {
     if (!cam) { toast("Konum okunamadı; üstten 2B görünüme geç."); return; }
     polygonLL = []; closed = false; stallsLL = []; stallTypes = []; aislesLL = []; gatesLL = []; result = null;
+    aislesEdited = false;
     dragDelta = { x: 0, y: 0 }; canvas.style.transform = "";
     resultEl.style.display = "none";
     mode = "draw";
@@ -556,6 +609,7 @@
   }
   function clearAll() {
     polygonLL = []; closed = false; stallsLL = []; stallTypes = []; aislesLL = []; gatesLL = []; result = null;
+    aislesEdited = false;
     mode = "idle";
     setInteractive(false);
     resultEl.style.display = "none";
@@ -617,7 +671,16 @@
 	    };
     const polyPx = polygonLL.map((ll) => ll2px(ll, cam));
     const t0 = performance.now();
-    const r = computeBestLayout(polyPx, mpp, opts);
+    let r;
+    if (aislesEdited && aislesLL.length) {
+      // Yollar elle düzenlendi → koridorları sabit tut, bayları yeniden diz.
+      const aisleQuads = aislesLL.map((a) => a.map((ll) => ll2px(ll, cam)));
+      r = fillBaysForAisles(polyPx, mpp, opts, aisleQuads);
+      if (r) r.angleDeg = lastAngleDeg;
+    } else {
+      r = computeBestLayout(polyPx, mpp, opts);
+      if (r) lastAngleDeg = r.angleDeg;
+    }
     const ms = (performance.now() - t0).toFixed(0);
     if (!r) { toast("Hesaplanamadı."); return; }
     // Park yerlerini coğrafi koordinata çevirerek sakla (sabitleme için)
@@ -686,7 +749,8 @@
       const index = hitAisle({ x: e.clientX, y: e.clientY });
       if (index < 0) return;
       aislesLL.splice(index, 1);
-      setStatus("Yol silindi. Gerekirse yeni yerleşim için tekrar hesapla.");
+      aislesEdited = true;
+      setStatus("Yol silindi. 'Hesapla' kalan yollara göre park yerlerini yeniden dizer.");
       redraw();
       return;
     }
@@ -747,6 +811,8 @@
   canvas.addEventListener("pointerup", (e) => {
     if (!roadDrag || roadDrag.pointerId !== e.pointerId) return;
     roadDrag = null;
+    aislesEdited = true; // yol elle taşındı → Hesapla'da sabit tut
+    setStatus("Yol taşındı. 'Yerleşimi Hesapla' park yerlerini bu yola göre yeniden dizer.");
     canvas.style.cursor = mode === "road" ? "grab" : "default";
   });
   canvas.addEventListener("pointercancel", () => {

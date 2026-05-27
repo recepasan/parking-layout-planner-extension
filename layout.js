@@ -117,86 +117,66 @@ function computeBestLayout(polygon, mpp, opts) {
     return rgates.some((gate) => _distancePointToRect(gate.point, rect) < gateClearance);
   }
 
-  function generateAisle(rpoly, aisleY, offX, rgates) {
-    const { minX, maxX } = _polyBounds(rpoly);
-    const cells = [];
-
-    for (let x = minX - offX; x + sw <= maxX; x += sw) {
-      const aisleOk = _rectInsidePoly(x, aisleY, x + sw, aisleY + aw, rpoly);
-      const bays = [];
-
-      if (aisleOk) {
-        const lowerY = aisleY - sd;
-        const upperY = aisleY + aw;
-        const lowerBay = { x, y: lowerY };
-        const upperBay = { x, y: upperY };
-        if (_rectInsidePoly(x, lowerY, x + sw, aisleY, rpoly) && !bayBlockedByGate(lowerBay, rgates)) {
-          bays.push(lowerBay);
-        }
-        if (_rectInsidePoly(x, upperY, x + sw, upperY + sd, rpoly) && !bayBlockedByGate(upperBay, rgates)) {
-          bays.push(upperBay);
-        }
-      }
-      cells.push({ x, aisleOk, bays });
-    }
-
-    let bestRun = null;
-    let run = null;
-
-    function closeRun() {
-      if (!run || !run.bays.length) {
-        run = null;
-        return;
-      }
-      run.x1 = run.lastX + sw;
-      const score = run.bays.length * 100000 + (run.x1 - run.x0);
-      if (!bestRun || score > bestRun.score) bestRun = Object.assign({ score }, run);
-      run = null;
-    }
-
-    for (const cell of cells) {
-      if (!cell.aisleOk) {
-        closeRun();
-        continue;
-      }
-      if (!run) run = { x0: cell.x, lastX: cell.x, bays: [] };
-      run.lastX = cell.x;
-      for (const bay of cell.bays) run.bays.push(bay);
-    }
-    closeRun();
-
-    if (!bestRun) return { count: 0, bays: [], aisles: [] };
-
-    const aisles = [{ x0: bestRun.x0, y0: aisleY, x1: bestRun.x1, y1: aisleY + aw }];
-    return { count: bestRun.bays.length, bays: bestRun.bays, aisles };
-  }
-
   function rangesOverlap(a0, a1, b0, b1) {
     return a0 < b1 && b0 < a1;
   }
 
-  function candidateConnectorXs(rpoly, rgates) {
+  // Bir yatay koridor satırını (aisleY) poligon içinde maksimal SEGMENTLERE böler.
+  // Konkav/girintili alanda bir satır birden çok parçaya ayrılır; HEPSİ korunur.
+  // Her segment kendi park baylarını (alt + üst sıra) taşır.
+  function horizontalSegments(rpoly, aisleY, offX, rgates) {
     const { minX, maxX } = _polyBounds(rpoly);
-    const span = maxX - minX;
-    if (span < aw) return [];
-
-    const values = new Set();
-    const add = (x) => {
-      if (x >= minX && x + aw <= maxX) values.add(Math.round(x * 1000) / 1000);
+    const segs = [];
+    let run = null;
+    const close = () => {
+      if (run && run.bays.length) { run.x1 = run.lastX + sw; segs.push(run); }
+      run = null;
     };
-
-    add(minX);
-    add(maxX - aw);
-    add((minX + maxX - aw) / 2);
-    for (const gate of rgates) {
-      add(gate.point.x - aw / 2);
-      add(gate.point.x);
-      add(gate.point.x - aw);
+    for (let x = minX - offX; x + sw <= maxX; x += sw) {
+      if (!_rectInsidePoly(x, aisleY, x + sw, aisleY + aw, rpoly)) { close(); continue; }
+      if (!run) run = { x0: x, lastX: x, y0: aisleY, y1: aisleY + aw, bays: [] };
+      run.lastX = x;
+      const lower = { x, y: aisleY - sd };
+      const upper = { x, y: aisleY + aw };
+      if (_rectInsidePoly(x, aisleY - sd, x + sw, aisleY, rpoly) && !bayBlockedByGate(lower, rgates)) run.bays.push(lower);
+      if (_rectInsidePoly(x, aisleY + aw, x + sw, aisleY + aw + sd, rpoly) && !bayBlockedByGate(upper, rgates)) run.bays.push(upper);
     }
+    close();
+    return segs;
+  }
 
-    const steps = 10;
-    for (let i = 0; i <= steps; i++) add(minX + ((span - aw) * i) / steps);
-    return Array.from(values);
+  // Dikey bağlayıcı yolu (xc'de, genişlik aw) poligon içinde maksimal segmentlere böler.
+  function verticalSegments(rpoly, xc) {
+    const { minY, maxY } = _polyBounds(rpoly);
+    const step = sd;
+    const segs = [];
+    let y0 = null, lastY = null;
+    const close = () => {
+      if (y0 !== null && (lastY + step - y0) >= aw) segs.push({ x0: xc, x1: xc + aw, y0, y1: lastY + step });
+      y0 = null; lastY = null;
+    };
+    for (let y = minY; y + step <= maxY; y += step) {
+      if (!_rectInsidePoly(xc, y, xc + aw, y + step, rpoly)) { close(); continue; }
+      if (y0 === null) y0 = y;
+      lastY = y;
+    }
+    close();
+    return segs;
+  }
+
+  // Dik bağlayıcı için aday x konumları: düzenli aralık + segment uçları + kapılar.
+  function connectorXs(rpoly, hsegs, rgates) {
+    const { minX, maxX } = _polyBounds(rpoly);
+    if (maxX - minX < aw) return [];
+    const snap = Math.max(1, sw * 0.5);
+    const set = new Set();
+    const add = (x) => { if (x >= minX && x + aw <= maxX) set.add(Math.round(x / snap) * snap); };
+    const spacing = Math.max(aw * 3, (aw + 2 * sd) * 1.4);
+    for (let x = minX; x + aw <= maxX; x += spacing) add(x);
+    add(maxX - aw);
+    for (const s of hsegs) { add(s.x0 - aw); add(s.x1); add(s.x0); add(s.x1 - aw); }
+    for (const g of rgates) add(g.point.x - aw / 2);
+    return Array.from(set);
   }
 
   function candidateStackStarts(rpoly, rgates) {
@@ -227,42 +207,61 @@ function computeBestLayout(polygon, mpp, opts) {
     return Array.from(values);
   }
 
-  // Büyük alanlarda birden fazla paralel koridor üretir ve bunları dik bir geçişle bağlar.
-  // Dar alanlarda otomatik olarak tek koridorlu yerleşime düşer.
-  function generateStack(rpoly, startY, offX, connectorX, rgates) {
+  // Çok-segmentli yatay koridorlar üretir, ardından AYRI segmentleri birleştiren
+  // minimal dik bağlayıcılarla (union-find spanning) bağlı bir sürüş ağı kurar.
+  // Konkav/girintili alanlarda her parça korunur; tek koridorluya da düşebilir.
+  function generateStack(rpoly, startY, offX, rgates) {
     const { minY, maxY } = _polyBounds(rpoly);
     const moduleDepth = aw + (backToBack ? 2 * sd : sd);
-    const runs = [];
 
-    for (let aisleY = startY; aisleY + aw <= maxY; aisleY += moduleDepth) {
-      const run = generateAisle(rpoly, aisleY, offX, rgates);
-      if (run.count) runs.push(run);
+    const hsegs = [];
+    for (let y = startY; y + aw <= maxY; y += moduleDepth) {
+      for (const s of horizontalSegments(rpoly, y, offX, rgates)) hsegs.push(s);
+    }
+    for (let y = startY - moduleDepth; y >= minY; y -= moduleDepth) {
+      for (const s of horizontalSegments(rpoly, y, offX, rgates)) hsegs.push(s);
+    }
+    if (!hsegs.length) return { count: 0, bays: [], aisles: [] };
+
+    // Dik bağlayıcı adayları → her birinin kestiği yatay segmentler.
+    const vAll = [];
+    for (const xc of connectorXs(rpoly, hsegs, rgates)) {
+      for (const v of verticalSegments(rpoly, xc)) vAll.push(v);
+    }
+    const cross = vAll.map((v) => {
+      const hits = [];
+      for (let i = 0; i < hsegs.length; i++) {
+        const h = hsegs[i];
+        if (rangesOverlap(v.x0, v.x1, h.x0, h.x1) && rangesOverlap(v.y0, v.y1, h.y0, h.y1)) hits.push(i);
+      }
+      return hits;
+    });
+
+    // Spanning: yalnızca farklı bileşenleri birleştiren bağlayıcıları seç (minimal).
+    const parent = hsegs.map((_, i) => i);
+    const find = (a) => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
+    const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) { parent[ra] = rb; return true; } return false; };
+    const order = vAll.map((_, i) => i).sort((a, b) => cross[b].length - cross[a].length);
+    const chosen = [];
+    for (const vi of order) {
+      const hits = cross[vi];
+      if (hits.length < 2) continue;
+      let merged = false;
+      for (let k = 1; k < hits.length; k++) { if (union(hits[0], hits[k])) merged = true; }
+      if (merged) chosen.push(vAll[vi]);
     }
 
-    if (!runs.length) return { count: 0, bays: [], aisles: [] };
-    if (runs.length === 1) return runs[0];
-
-    const y0 = Math.min(...runs.map((r) => r.aisles[0].y0));
-    const y1 = Math.max(...runs.map((r) => r.aisles[0].y1));
-    const touchesAll = runs.every((r) =>
-      rangesOverlap(connectorX, connectorX + aw, r.aisles[0].x0, r.aisles[0].x1)
-    );
-    if (!touchesAll || !_rectInsidePoly(connectorX, y0, connectorX + aw, y1, rpoly)) {
-      return { count: 0, bays: [], aisles: [] };
-    }
-
-    const bayMap = new Map();
-    const aisles = [];
-    for (const run of runs) {
-      aisles.push(run.aisles[0]);
-      for (const bay of run.bays) {
-        if (rangesOverlap(bay.x, bay.x + sw, connectorX, connectorX + aw)) continue;
-        const key = `${Math.round(bay.x * 1000)}:${Math.round(bay.y * 1000)}`;
-        if (!bayMap.has(key)) bayMap.set(key, bay);
+    const connRects = chosen.map((v) => ({ x: v.x0, y: v.y0, w: v.x1 - v.x0, h: v.y1 - v.y0 }));
+    const bays = [];
+    for (const h of hsegs) {
+      for (const b of h.bays) {
+        if (connRects.some((cr) => _rectsOverlap({ x: b.x, y: b.y, w: sw, h: sd }, cr))) continue;
+        bays.push(b);
       }
     }
-    const bays = Array.from(bayMap.values());
-    aisles.push({ x0: connectorX, y0, x1: connectorX + aw, y1 });
+    const aisles = hsegs
+      .map((h) => ({ x0: h.x0, y0: h.y0, x1: h.x1, y1: h.y1 }))
+      .concat(chosen.map((v) => ({ x0: v.x0, y0: v.y0, x1: v.x1, y1: v.y1 })));
     return { count: bays.length, bays, aisles };
   }
 
@@ -297,8 +296,11 @@ function computeBestLayout(polygon, mpp, opts) {
   function addBayIfClear(bays, aisles, bay, rpoly, rgates) {
     if (bay.corners) {
       if (bayBlockedByGate(bay, rgates)) return;
-      const inner = [bay.corners[2], bay.corners[3], centroidOfCorners(bay.corners)];
-      for (const p of inner) {
+      // 4 köşeyi de (merkeze %4 çekilmiş — sınır hassasiyeti için) + merkez test et.
+      const ctr = centroidOfCorners(bay.corners);
+      const probes = bay.corners.map((p) => ({ x: p.x + (ctr.x - p.x) * 0.04, y: p.y + (ctr.y - p.y) * 0.04 }));
+      probes.push(ctr);
+      for (const p of probes) {
         if (!_pointInPoly(p, rpoly)) return;
       }
       const rect = rectOfBay(bay);
@@ -352,19 +354,26 @@ function computeBestLayout(polygon, mpp, opts) {
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       const inward = normals.find((n) => _pointInPoly({ x: mid.x + n.x * sd * 0.65, y: mid.y + n.y * sd * 0.65 }, rpoly));
       if (!inward) continue;
-      const hasAccess = layout.aisles.some((aisle) =>
-        _distancePointToRect(
-          { x: mid.x + inward.x * (sd + aw * 0.5), y: mid.y + inward.y * (sd + aw * 0.5) },
-          { x0: aisle.x0, y0: aisle.y0, x1: aisle.x1, y1: aisle.y1 }
-        ) < aw * 1.5
+      // Kenarın HİÇBİR yerinde koridor yoksa kenarı tümden atla (ucuz ön-eleme).
+      const edgeProbe = { x: mid.x + inward.x * (sd + aw * 0.5), y: mid.y + inward.y * (sd + aw * 0.5) };
+      const edgeHasAisle = layout.aisles.some((al) =>
+        _distancePointToRect(edgeProbe, { x0: al.x0, y0: al.y0, x1: al.x1, y1: al.y1 }) < len / 2 + aw
       );
-      if (!hasAccess) continue;
+      if (!edgeHasAisle) continue;
 
       for (let t = 0; t + sw <= len; t += sw) {
         const p0 = { x: a.x + ux * t, y: a.y + uy * t };
         const p1 = { x: a.x + ux * (t + sw), y: a.y + uy * (t + sw) };
         const p2 = { x: p1.x + inward.x * sd, y: p1.y + inward.y * sd };
         const p3 = { x: p0.x + inward.x * sd, y: p0.y + inward.y * sd };
+        // HER BAY için ayrı erişim: iç kenarı bir koridora NEREDEYSE TEMAS etmeli
+        // (boşluk ~1 m'den fazlaysa ölü şerit oluşur → bayı ekleme).
+        const innerMid = { x: (p2.x + p3.x) / 2, y: (p2.y + p3.y) / 2 };
+        const probe = { x: innerMid.x + inward.x * (aw * 0.05), y: innerMid.y + inward.y * (aw * 0.05) };
+        const adjacent = layout.aisles.some((al) =>
+          _distancePointToRect(probe, { x0: al.x0, y0: al.y0, x1: al.x1, y1: al.y1 }) < aw * 0.15
+        );
+        if (!adjacent) continue;
         addBayIfClear(bays, layout.aisles, { corners: [p0, p1, p2, p3] }, rpoly, rgates);
       }
     }
@@ -389,10 +398,10 @@ function computeBestLayout(polygon, mpp, opts) {
     return layout.count * 100000 + aisleLength - gatePenalty * 250;
   }
 
-  // Açı + koridor fazı + geçiş koridoru taraması.
-  // Kapasite kadar, bütün park ceplerinin bağlı bir sürüş ağına erişilmesi de şarttır.
+  // Açı + koridor fazı (startY) + x-fazı taraması. Arama sırasında yalnızca iç
+  // ağ skorlanır (hızlı); çevre bayları yalnızca KAZANAN düzene bir kez eklenir.
   let best = null;
-  const OX = 4;
+  const OX = 3;
   for (let aDeg = 0; aDeg < 180; aDeg += opts.angleStepDeg) {
     const ang = (aDeg * Math.PI) / 180;
     const rpoly = polygon.map((p) => _rotate(p, -ang, c));
@@ -400,21 +409,81 @@ function computeBestLayout(polygon, mpp, opts) {
     for (const startY of candidateStackStarts(rpoly, rgates)) {
       for (let ix = 0; ix < OX; ix++) {
         const offX = (sw * ix) / OX;
-        for (const connectorX of candidateConnectorXs(rpoly, rgates)) {
-          const base = generateStack(rpoly, startY, offX, connectorX, rgates);
-          const r = base.count ? addPerimeterBays(base, rpoly, rgates, offX) : base;
-          const score = scoreLayout(r, rgates);
-          if (!best || score > best.score) {
-            best = { score, count: r.count, aDeg, ang, layout: r };
-          }
+        const base = generateStack(rpoly, startY, offX, rgates);
+        if (!base.count) continue;
+        const score = scoreLayout(base, rgates);
+        if (!best || score > best.score) {
+          best = { score, ang, aDeg, rpoly, rgates, offX, base };
         }
       }
     }
   }
 
-  if (!best || !best.count) return null;
-  const { stalls, aisles } = rotatedLayout(best.layout, best.ang);
+  if (!best) return null;
+  const final = addPerimeterBays(best.base, best.rpoly, best.rgates, best.offX);
+  const { stalls, aisles } = rotatedLayout(final, best.ang);
 
   const areaM2 = _polyAreaPx(polygon) * mpp * mpp;
-  return { count: best.count, angleDeg: best.aDeg, stalls, aisles, areaM2, opts };
+  return { count: final.count, angleDeg: best.aDeg, stalls, aisles, areaM2, opts };
+}
+
+// Kullanıcı yolları elle taşıdıktan sonra: koridorları SABİT tutup
+// park yerlerini onların uzun kenarları boyunca yeniden dizer.
+//   polygon, aisleQuads, gates: hepsi ekran pikseli (4 köşeli quad'lar).
+function fillBaysForAisles(polygon, mpp, opts, aisleQuads) {
+  opts = Object.assign(
+    { stallWidthM: 2.5, stallDepthM: 5.0, aisleWidthM: 6.0 },
+    opts || {}
+  );
+  if (!polygon || polygon.length < 3 || !mpp || mpp <= 0) return null;
+  if (!aisleQuads || !aisleQuads.length) return null;
+
+  const pxPerM = 1 / mpp;
+  const sw = opts.stallWidthM * pxPerM;
+  const sd = opts.stallDepthM * pxPerM;
+  const gates = Array.isArray(opts.gates) ? opts.gates.filter((g) => g && g.point) : [];
+  const gateClearance = Math.max(opts.aisleWidthM * pxPerM * 1.35, sd * 1.1);
+
+  const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+  const N = (v) => { const l = Math.hypot(v.x, v.y) || 1; return { x: v.x / l, y: v.y / l }; };
+  const aisleRects = aisleQuads.map((q) => _bboxOfPoints(q));
+  const bays = [];
+
+  for (const q of aisleQuads) {
+    const center = {
+      x: (q[0].x + q[1].x + q[2].x + q[3].x) / 4,
+      y: (q[0].y + q[1].y + q[2].y + q[3].y) / 4,
+    };
+    const edges = [[0, 1], [1, 2], [2, 3], [3, 0]]
+      .map(([i, j]) => ({ a: q[i], b: q[j], len: D(q[i], q[j]) }))
+      .sort((p, r) => r.len - p.len)
+      .slice(0, 2); // en uzun iki kenar = koridorun uzun yüzleri
+
+    for (const e of edges) {
+      if (e.len < sw) continue;
+      const u = N({ x: e.b.x - e.a.x, y: e.b.y - e.a.y });
+      const mid = { x: (e.a.x + e.b.x) / 2, y: (e.a.y + e.b.y) / 2 };
+      const n = N({ x: mid.x - center.x, y: mid.y - center.y }); // dışa doğru normal
+
+      for (let t = 0; t + sw <= e.len + 0.01; t += sw) {
+        const p0 = { x: e.a.x + u.x * t, y: e.a.y + u.y * t };
+        const p1 = { x: e.a.x + u.x * (t + sw), y: e.a.y + u.y * (t + sw) };
+        const p2 = { x: p1.x + n.x * sd, y: p1.y + n.y * sd };
+        const p3 = { x: p0.x + n.x * sd, y: p0.y + n.y * sd };
+        const corners = [p0, p1, p2, p3];
+        const cc = { x: (p0.x + p1.x + p2.x + p3.x) / 4, y: (p0.y + p1.y + p2.y + p3.y) / 4 };
+        if (!_pointInPoly(p2, polygon) || !_pointInPoly(p3, polygon) || !_pointInPoly(cc, polygon)) continue;
+
+        const bb = _bboxOfPoints(corners);
+        const rect = { x0: bb.x, y0: bb.y, x1: bb.x + bb.w, y1: bb.y + bb.h };
+        if (gates.some((g) => _distancePointToRect(g.point, rect) < gateClearance)) continue;
+        if (aisleRects.some((ar) => _rectsOverlap(bb, ar))) continue;
+        if (bays.some((ex) => _rectsOverlap(bb, _bboxOfPoints(ex)))) continue;
+        bays.push(corners);
+      }
+    }
+  }
+
+  const areaM2 = _polyAreaPx(polygon) * mpp * mpp;
+  return { count: bays.length, stalls: bays, aisles: aisleQuads, areaM2, opts };
 }
