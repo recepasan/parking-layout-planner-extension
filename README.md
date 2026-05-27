@@ -6,6 +6,7 @@ Google Maps üzerinde bir araziyi çizip **en verimli otopark yerleşimini gerç
 - Haritanın üzerine şeffaf bir çizim katmanı (canvas) ve sağ üstte bir kontrol paneli ekler.
 - Ölçeği, Google Maps URL'sindeki zoom değerinden Web Mercator formülüyle (`156543.03 · cos(enlem) / 2^zoom` m/piksel) otomatik hesaplar.
 - Bağlı bir sürüş ağı üretmek için 0–180° arası farklı açılarda tek veya çoklu paralel koridorları dener; geniş alanlarda koridorları dik geçişle bağlar.
+- Dış sınır boyunca, referans planlardaki gibi kenar çizgisine bitişik tek sıra park cepleri ekler.
 - Çıktıyı vaziyet planı stilinde çizer: gri asfalt, beyaz park çizgileri, peyzaj adaları, erişilebilir parklar ve EV/özel park blokları.
 
 ## Kurulum

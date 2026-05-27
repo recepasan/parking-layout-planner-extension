@@ -66,6 +66,21 @@ function _distancePointToRect(pt, rect) {
   return Math.hypot(dx, dy);
 }
 
+function _rectsOverlap(a, b) {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+function _bboxOfPoints(pts) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
 // En verimli park yerleşimini hesaplar.
 //   polygon: [{x,y}] (CSS piksel),  mpp: metre/piksel
 //   opts: { stallWidthM, stallDepthM, aisleWidthM, angleStepDeg, gates }
@@ -92,7 +107,13 @@ function computeBestLayout(polygon, mpp, opts) {
   const c = { x: cx, y: cy };
 
   function bayBlockedByGate(bay, rgates) {
-    const rect = { x0: bay.x, y0: bay.y, x1: bay.x + sw, y1: bay.y + sd };
+    if (bay.corners) {
+      const b = _bboxOfPoints(bay.corners);
+      const rect = { x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h };
+      return rgates.some((gate) => _distancePointToRect(gate.point, rect) < gateClearance);
+    }
+    const s = baySize(bay);
+    const rect = { x0: bay.x, y0: bay.y, x1: bay.x + s.w, y1: bay.y + s.h };
     return rgates.some((gate) => _distancePointToRect(gate.point, rect) < gateClearance);
   }
 
@@ -247,7 +268,9 @@ function computeBestLayout(polygon, mpp, opts) {
 
   function rotatedLayout(layout, ang) {
     const stalls = layout.bays.map((b) => {
-      const cs = _rectCorners(b.x, b.y, b.x + sw, b.y + sd);
+      if (b.corners) return b.corners.map((p) => _rotate(p, ang, c));
+      const s = baySize(b);
+      const cs = _rectCorners(b.x, b.y, b.x + s.w, b.y + s.h);
       return cs.map((p) => _rotate(p, ang, c));
     });
     const aisles = layout.aisles.map((a) => {
@@ -255,6 +278,102 @@ function computeBestLayout(polygon, mpp, opts) {
       return cs.map((p) => _rotate(p, ang, c));
     });
     return { stalls, aisles };
+  }
+
+  function baySize(bay) {
+    if (bay.corners) {
+      const b = _bboxOfPoints(bay.corners);
+      return { w: b.w, h: b.h };
+    }
+    return bay.vertical ? { w: sd, h: sw } : { w: sw, h: sd };
+  }
+
+  function rectOfBay(bay) {
+    if (bay.corners) return _bboxOfPoints(bay.corners);
+    const s = baySize(bay);
+    return { x: bay.x, y: bay.y, w: s.w, h: s.h };
+  }
+
+  function addBayIfClear(bays, aisles, bay, rpoly, rgates) {
+    if (bay.corners) {
+      if (bayBlockedByGate(bay, rgates)) return;
+      const inner = [bay.corners[2], bay.corners[3], centroidOfCorners(bay.corners)];
+      for (const p of inner) {
+        if (!_pointInPoly(p, rpoly)) return;
+      }
+      const rect = rectOfBay(bay);
+      for (const existing of bays) {
+        if (_rectsOverlap(rect, rectOfBay(existing))) return;
+      }
+      for (const aisle of aisles) {
+        if (_rectsOverlap(rect, { x: aisle.x0, y: aisle.y0, w: aisle.x1 - aisle.x0, h: aisle.y1 - aisle.y0 })) return;
+      }
+      bays.push(bay);
+      return;
+    }
+    const s = baySize(bay);
+    if (!_rectInsidePoly(bay.x, bay.y, bay.x + s.w, bay.y + s.h, rpoly)) return;
+    if (bayBlockedByGate(bay, rgates)) return;
+    const rect = rectOfBay(bay);
+    for (const existing of bays) {
+      if (_rectsOverlap(rect, rectOfBay(existing))) return;
+    }
+    for (const aisle of aisles) {
+      if (_rectsOverlap(rect, { x: aisle.x0, y: aisle.y0, w: aisle.x1 - aisle.x0, h: aisle.y1 - aisle.y0 })) return;
+    }
+    bays.push(bay);
+  }
+
+  function centroidOfCorners(corners) {
+    let x = 0, y = 0;
+    for (const p of corners) { x += p.x; y += p.y; }
+    return { x: x / corners.length, y: y / corners.length };
+  }
+
+  function addPerimeterBays(layout, rpoly, rgates, offX) {
+    const bays = [];
+    const innerBays = layout.bays.slice();
+    const bounds = _polyBounds(rpoly);
+    const spanX = bounds.maxX - bounds.minX;
+    const spanY = bounds.maxY - bounds.minY;
+    const minEdgeLen = Math.max(sw * 6, Math.min(spanX, spanY) * 0.5);
+    for (let i = 0; i < rpoly.length; i++) {
+      const a = rpoly[i], b = rpoly[(i + 1) % rpoly.length];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < minEdgeLen) continue;
+
+      const ux = dx / len, uy = dy / len;
+      const axisAligned = Math.abs(ux) > 0.9 || Math.abs(uy) > 0.9;
+      if (!axisAligned) continue;
+      const normals = [
+        { x: -uy, y: ux },
+        { x: uy, y: -ux },
+      ];
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const inward = normals.find((n) => _pointInPoly({ x: mid.x + n.x * sd * 0.65, y: mid.y + n.y * sd * 0.65 }, rpoly));
+      if (!inward) continue;
+      const hasAccess = layout.aisles.some((aisle) =>
+        _distancePointToRect(
+          { x: mid.x + inward.x * (sd + aw * 0.5), y: mid.y + inward.y * (sd + aw * 0.5) },
+          { x0: aisle.x0, y0: aisle.y0, x1: aisle.x1, y1: aisle.y1 }
+        ) < aw * 1.5
+      );
+      if (!hasAccess) continue;
+
+      for (let t = 0; t + sw <= len; t += sw) {
+        const p0 = { x: a.x + ux * t, y: a.y + uy * t };
+        const p1 = { x: a.x + ux * (t + sw), y: a.y + uy * (t + sw) };
+        const p2 = { x: p1.x + inward.x * sd, y: p1.y + inward.y * sd };
+        const p3 = { x: p0.x + inward.x * sd, y: p0.y + inward.y * sd };
+        addBayIfClear(bays, layout.aisles, { corners: [p0, p1, p2, p3] }, rpoly, rgates);
+      }
+    }
+    for (const bay of innerBays) {
+      addBayIfClear(bays, layout.aisles, bay, rpoly, rgates);
+    }
+
+    return { count: bays.length, bays, aisles: layout.aisles };
   }
 
   function scoreLayout(layout, rgates) {
@@ -283,7 +402,8 @@ function computeBestLayout(polygon, mpp, opts) {
       for (let ix = 0; ix < OX; ix++) {
         const offX = (sw * ix) / OX;
         for (const connectorX of candidateConnectorXs(rpoly, rgates)) {
-          const r = generateStack(rpoly, startY, offX, connectorX, rgates);
+          const base = generateStack(rpoly, startY, offX, connectorX, rgates);
+          const r = base.count ? addPerimeterBays(base, rpoly, rgates, offX) : base;
           const score = scoreLayout(r, rgates);
           if (!best || score > best.score) {
             best = { score, count: r.count, aDeg, ang, layout: r };

@@ -308,15 +308,15 @@
     ctx.save();
     ctx.translate(lc.x, lc.y);
     ctx.rotate(angle);
-    ctx.font = "700 11px -apple-system, Segoe UI, Roboto, sans-serif";
+    ctx.font = "700 10px -apple-system, Segoe UI, Roboto, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const tw = ctx.measureText(label).width + 12;
-    ctx.fillStyle = "rgba(20,22,28,0.78)";
+    ctx.fillStyle = "rgba(20,22,28,0.58)";
     ctx.beginPath();
     ctx.roundRect(-tw / 2, -10, tw, 20, 5);
     ctx.fill();
-    ctx.fillStyle = "#fef3c7";
+    ctx.fillStyle = "rgba(254,243,199,0.92)";
     ctx.fillText(label, 0, 0);
     ctx.restore();
 
@@ -337,14 +337,6 @@
         ctx.fill();
         ctx.stroke();
       }
-      if (index != null) {
-        const lLabel = `${aisleLengthM(a).toFixed(1)} m`;
-        ctx.font = "700 10px -apple-system, Segoe UI, Roboto, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = "rgba(20,22,28,0.72)";
-        ctx.fillText(lLabel, lc.x, lc.y + 18);
-      }
     }
   }
 
@@ -353,7 +345,7 @@
     let cx = 0, cy = 0;
     for (const p of st) { cx += p.x; cy += p.y; }
     cx /= 4; cy /= 4;
-    const k = 0.86; // cepler arası boşluk için içe daraltma
+    const k = type === "landscape" ? 0.86 : 1.0;
     const pts = st.map((p) => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k }));
     ctx.beginPath();
     pts.forEach((p, i) => {
