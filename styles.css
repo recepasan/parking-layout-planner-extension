@@ -1,0 +1,118 @@
+/* Otopark Yerleşim Planlayıcı — panel stilleri */
+#opl-panel {
+  position: fixed;
+  top: 90px;
+  right: 12px;
+  width: 268px;
+  z-index: 2147483647;
+  background: rgba(20, 22, 28, 0.95);
+  color: #f2f4f8;
+  font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif;
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  padding: 12px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+#opl-panel h1 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  letter-spacing: 0.2px;
+}
+#opl-panel .opl-scale {
+  font-size: 11px;
+  color: #9fb4d6;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+#opl-panel .opl-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+#opl-panel button {
+  flex: 1;
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: #2b6fff;
+  transition: filter 0.12s;
+}
+#opl-panel button:hover { filter: brightness(1.12); }
+#opl-panel button.opl-secondary { background: #424a5a; }
+#opl-panel button.opl-danger { background: #c0392b; }
+#opl-panel .opl-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+#opl-panel label {
+  font-size: 10px;
+  color: #9fb4d6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#opl-panel label.opl-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 0 10px;
+  font-size: 11px;
+  color: #d8e2f0;
+}
+#opl-panel input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #fff;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+#opl-panel .opl-check input {
+  width: auto;
+}
+#opl-panel .opl-result {
+  font-size: 12px;
+  background: rgba(43, 111, 255, 0.16);
+  border: 1px solid rgba(43, 111, 255, 0.35);
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+#opl-panel .opl-result b { font-size: 16px; color: #7fb0ff; }
+#opl-panel .opl-status {
+  font-size: 11px;
+  color: #c7d2e0;
+  margin-top: 8px;
+  min-height: 14px;
+}
+#opl-toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483647;
+  background: rgba(20, 22, 28, 0.95);
+  color: #fff;
+  font: 13px -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 10px 16px;
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+#opl-toast.opl-show { opacity: 1; }

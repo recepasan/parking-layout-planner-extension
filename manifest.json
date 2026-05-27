@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Otopark Yerleşim Planlayıcı (Test)",
+  "version": "0.1.0",
+  "description": "Google Maps üzerinde bir alan çizip en verimli otopark yerleşimini gerçek metre ölçeğinde görsel olarak gösterir.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.google.com/maps/*",
+        "https://www.google.com/maps",
+        "https://maps.google.com/*"
+      ],
+      "js": ["layout.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
