@@ -78,13 +78,6 @@ No build step, no dependencies — plain JavaScript.
 - The parcel center is assumed at the viewport center; if a Google side panel is open the projection may shift slightly — use the plain map view.
 - Obstacles inside the parcel (buildings, trees) are not detected; the algorithm fills geometrically.
 
-## Roadmap
-
-- Per-region multi-orientation refinement and curved road geometry.
-- Obstacle / keep-out zones.
-- Local zoning rules (ADA ratios, fire lanes).
-- DXF / PNG export.
-
 ## License
 
 [MIT](LICENSE).
@@ -93,4 +86,14 @@ No build step, no dependencies — plain JavaScript.
 
 ## Türkçe
 
-Google Maps üzerinde bir parsel çizip **gerçek metre ölçeğinde** verimli bir otopark yerleşimi üreten deneysel bir tarayıcı eklentisi. Arayüz **İngilizce/Türkçe** (sağ üstteki düğmeyle değiştirilir, varsayılan İngilizce). Kurulum: `chrome://extensions` → Geliştirici modu → **Paketlenmemiş öğe yükle** → bu klasörü seç → `google.com/maps`'i yenile. Kullanım: alanı çiz (**Vertices**/**Freehand**) → *(isteğe bağlı)* kapı/yol/seçenekler → **Compute Layout**.
+Google Maps üzerinde bir parsel çizip **gerçek metre ölçeğinde** verimli bir otopark yerleşimi üreten deneysel bir tarayıcı eklentisi. Arayüz **İngilizce/Türkçe** (sağ üstteki düğmeyle değiştirilir, varsayılan İngilizce).
+
+**Kurulum:**
+1. `chrome://extensions` → **Geliştirici modu**'nu aç.
+2. **Paketlenmemiş öğe yükle** → bu klasörü seç.
+3. **Önemli:** eklentinin **Ayrıntılar**'ını açıp **"Arama sayfası sonuçlarına erişime izin ver"** seçeneğini etkinleştir. İçerik betiği `google.com` ile eşleştiği için Chrome bunu bu seçeneğe bağlar — **işaretlenmezse panel açılmaz.**
+4. `google.com/maps`'i aç ve sekmeyi **yenile** → panel sağ üstte çıkar.
+
+**Kullanım:** alanı çiz (**Vertices**/**Freehand**) → *(isteğe bağlı)* kapı/yol/seçenekler → **Compute Layout**.
+
+**Panel görünmüyorsa:** "Arama sayfası sonuçlarına erişime izin ver" açık mı kontrol et ve Maps sekmesini yenile.
