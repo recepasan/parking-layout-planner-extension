@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Otopark Yerleşim Planlayıcı (Test)",
+  "name": "Parking Layout Planner (Experimental)",
   "version": "0.1.0",
-  "description": "Google Maps üzerinde bir alan çizip en verimli otopark yerleşimini gerçek metre ölçeğinde görsel olarak gösterir.",
+  "description": "Draw a lot on Google Maps and visualize an efficient parking layout at real metric scale. Bilingual (EN/TR).",
   "content_scripts": [
     {
       "matches": [

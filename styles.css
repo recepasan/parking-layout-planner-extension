@@ -20,6 +20,26 @@
   margin: 0 0 8px;
   letter-spacing: 0.2px;
 }
+#opl-panel .opl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#opl-panel .opl-head h1 { margin: 0; }
+#opl-panel .opl-lang {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: #424a5a;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+#opl-panel .opl-lang:hover { filter: brightness(1.15); }
 #opl-panel .opl-scale {
   font-size: 11px;
   color: #9fb4d6;

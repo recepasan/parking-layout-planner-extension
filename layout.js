@@ -81,11 +81,8 @@ function _bboxOfPoints(pts) {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
-// En verimli park yerleşimini hesaplar.
-//   polygon: [{x,y}] (CSS piksel),  mpp: metre/piksel
-//   opts: { stallWidthM, stallDepthM, aisleWidthM, angleStepDeg, gates }
-// Döndürür: { count, angleDeg, stalls:[[{x,y}*4]], aisles:[[{x,y}*4]], areaM2, opts }
-function computeBestLayout(polygon, mpp, opts) {
+// Tek yön + tek faz ile bir poligonu yerleştirir (çekirdek motor).
+function _layoutSingle(polygon, mpp, opts) {
   opts = Object.assign(
     { stallWidthM: 2.5, stallDepthM: 5.0, aisleWidthM: 6.0, angleStepDeg: 10 },
     opts || {}
@@ -425,6 +422,184 @@ function computeBestLayout(polygon, mpp, opts) {
 
   const areaM2 = _polyAreaPx(polygon) * mpp * mpp;
   return { count: final.count, angleDeg: best.aDeg, stalls, aisles, areaM2, opts };
+}
+
+// Binary ızgarada (1 = boş) en büyük tüm-1 dikdörtgeni (histogram yöntemi).
+function _largestRect(grid, R, C) {
+  const h = new Array(C).fill(0);
+  let best = null;
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) h[c] = grid[r * C + c] ? h[c] + 1 : 0;
+    const stack = [];
+    for (let c = 0; c <= C; c++) {
+      const cur = c < C ? h[c] : 0;
+      let start = c;
+      while (stack.length && stack[stack.length - 1].h > cur) {
+        const top = stack.pop();
+        const area = top.h * (c - top.i);
+        if (!best || area > best.area) best = { area, r0: r - top.h + 1, r1: r + 1, c0: top.i, c1: c };
+        start = top.i;
+      }
+      stack.push({ i: start, h: cur });
+    }
+  }
+  return best;
+}
+
+// Bir bayın tamamı (köşeler merkeze hafif çekilmiş + merkez) poligon içinde mi?
+function _bayInside(st, poly) {
+  let cx = 0, cy = 0;
+  for (const p of st) { cx += p.x; cy += p.y; }
+  cx /= st.length; cy /= st.length;
+  for (const p of st) {
+    if (!_pointInPoly({ x: p.x + (cx - p.x) * 0.06, y: p.y + (cy - p.y) * 0.06 }, poly)) return false;
+  }
+  return _pointInPoly({ x: cx, y: cy }, poly);
+}
+
+// Poligonu büyük dikdörtgenlere ayırıp (greedy largest-rectangle) her birini
+// kendi yön+fazıyla yerleştirir. İnce şerit / girinti gibi farklı faz isteyen
+// bölgeler ana ızgaraya feda edilmeden dolar.
+function _decomposeLayout(polygon, mpp, opts) {
+  const pxPerM = 1 / mpp;
+  const sw = opts.stallWidthM * pxPerM;
+  const sd = opts.stallDepthM * pxPerM;
+  const aw = opts.aisleWidthM * pxPerM;
+  const minBand = sd + aw;
+
+  const b = _polyBounds(polygon);
+  const cell = Math.max(4, sd * 0.35);
+  const C = Math.ceil((b.maxX - b.minX) / cell);
+  const R = Math.ceil((b.maxY - b.minY) / cell);
+  if (C < 2 || R < 2 || C * R > 300000) return null;
+
+  const grid = new Uint8Array(R * C);
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      const p = { x: b.minX + (c + 0.5) * cell, y: b.minY + (r + 0.5) * cell };
+      grid[r * C + c] = _pointInPoly(p, polygon) ? 1 : 0;
+    }
+  }
+
+  const rects = [];
+  for (let it = 0; it < 12 && rects.length < 6; it++) {
+    const rc = _largestRect(grid, R, C);
+    if (!rc) break;
+    for (let r = rc.r0; r < rc.r1; r++) for (let c = rc.c0; c < rc.c1; c++) grid[r * C + c] = 0;
+    const rx0 = b.minX + rc.c0 * cell, rx1 = b.minX + rc.c1 * cell;
+    const ry0 = b.minY + rc.r0 * cell, ry1 = b.minY + rc.r1 * cell;
+    if (Math.min(rx1 - rx0, ry1 - ry0) < minBand * 0.95) continue;
+    // Izgara kırpmasını ve tam-sınır knife-edge'ini telafi için biraz büyüt;
+    // taşan baylar _bayInside ile kırpılır.
+    const ex = cell * 1.5;
+    const x0 = Math.max(b.minX, rx0 - ex), x1 = Math.min(b.maxX, rx1 + ex);
+    const y0 = Math.max(b.minY, ry0 - ex), y1 = Math.min(b.maxY, ry1 + ex);
+    rects.push([{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]);
+  }
+  if (!rects.length) return null;
+
+  const stalls = [], aisles = [], boxes = [];
+  const ov = (q) => {
+    const bb = _bboxOfPoints(q);
+    return boxes.some((e) => bb.x < e.x + e.w && e.x < bb.x + bb.w && bb.y < e.y + e.h && e.y < bb.y + bb.h);
+  };
+  for (const rect of rects) {
+    const r = _layoutSingle(rect, mpp, opts);
+    if (!r) continue;
+    for (const st of r.stalls) {
+      if (_bayInside(st, polygon) && !ov(st)) { stalls.push(st); boxes.push(_bboxOfPoints(st)); }
+    }
+    for (const al of r.aisles) {
+      if (!ov(al)) { aisles.push(al); boxes.push(_bboxOfPoints(al)); }
+    }
+  }
+  return { count: stalls.length, stalls, aisles };
+}
+
+// En verimli park yerleşimini hesaplar. Tek-yön/faz çözümü (A) ile bölgesel
+// ayrıştırma (B) hesaplanır; daha çok bay üreten seçilir. Böylece döndürülmüş
+// konveks parseller tek-yönde, ince şerit/girintili parseller B'de kazanır.
+//   Döndürür: { count, angleDeg, stalls:[[{x,y}*4]], aisles:[[{x,y}*4]], areaM2, opts }
+function computeBestLayout(polygon, mpp, opts) {
+  const A = _layoutSingle(polygon, mpp, opts);
+  if (!A) return null;
+  opts = A.opts;
+  let B = null;
+  try { B = _decomposeLayout(polygon, mpp, opts); } catch (e) { B = null; }
+  const useB = B && B.count > A.count;
+  let stalls = useB ? B.stalls : A.stalls;
+  let aisles = useB ? B.aisles : A.aisles;
+
+  // İsteğe bağlı: kalan büyük boş alanları da kendi yön/fazıyla ek olarak doldur.
+  if (opts.fillEmpty) {
+    const filled = _fillEmpty(polygon, mpp, opts, { stalls, aisles });
+    stalls = filled.stalls;
+    aisles = filled.aisles;
+  }
+  return { count: stalls.length, angleDeg: A.angleDeg, stalls, aisles, areaM2: A.areaM2, opts };
+}
+
+// Mevcut yerleşimin kaplamadığı büyük boş dikdörtgenleri bulup her birini
+// kendi yön/fazıyla doldurur ve sonuca EKLER (değiştirmez). isteğe bağlı.
+function _fillEmpty(polygon, mpp, opts, layout) {
+  const pxPerM = 1 / mpp;
+  const sd = opts.stallDepthM * pxPerM;
+  const aw = opts.aisleWidthM * pxPerM;
+  const sw = opts.stallWidthM * pxPerM;
+  const minBand = sd + aw;
+
+  const b = _polyBounds(polygon);
+  const cell = Math.max(4, sd * 0.4);
+  const C = Math.ceil((b.maxX - b.minX) / cell);
+  const R = Math.ceil((b.maxY - b.minY) / cell);
+  if (C < 2 || R < 2 || C * R > 300000) return layout;
+
+  const grid = new Uint8Array(R * C);
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      const p = { x: b.minX + (c + 0.5) * cell, y: b.minY + (r + 0.5) * cell };
+      grid[r * C + c] = _pointInPoly(p, polygon) ? 1 : 0;
+    }
+  }
+  const markCov = (quad) => {
+    const bb = _bboxOfPoints(quad);
+    const c0 = Math.max(0, Math.floor((bb.x - b.minX) / cell));
+    const c1 = Math.min(C - 1, Math.floor((bb.x + bb.w - b.minX) / cell));
+    const r0 = Math.max(0, Math.floor((bb.y - b.minY) / cell));
+    const r1 = Math.min(R - 1, Math.floor((bb.y + bb.h - b.minY) / cell));
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) grid[r * C + c] = 0;
+  };
+  for (const s of layout.stalls) markCov(s);
+  for (const a of layout.aisles) markCov(a);
+
+  const stalls = layout.stalls.slice();
+  const aisles = layout.aisles.slice();
+  const boxes = stalls.concat(aisles).map(_bboxOfPoints);
+  const ov = (q) => {
+    const bb = _bboxOfPoints(q);
+    return boxes.some((e) => bb.x < e.x + e.w && e.x < bb.x + bb.w && bb.y < e.y + e.h && e.y < bb.y + bb.h);
+  };
+
+  for (let it = 0; it < 8; it++) {
+    const rc = _largestRect(grid, R, C);
+    if (!rc) break;
+    for (let r = rc.r0; r < rc.r1; r++) for (let c = rc.c0; c < rc.c1; c++) grid[r * C + c] = 0;
+    const rx0 = b.minX + rc.c0 * cell, rx1 = b.minX + rc.c1 * cell;
+    const ry0 = b.minY + rc.r0 * cell, ry1 = b.minY + rc.r1 * cell;
+    if (Math.min(rx1 - rx0, ry1 - ry0) < minBand * 0.95) continue;
+    const ex = cell * 1.5;
+    const x0 = Math.max(b.minX, rx0 - ex), x1 = Math.min(b.maxX, rx1 + ex);
+    const y0 = Math.max(b.minY, ry0 - ex), y1 = Math.min(b.maxY, ry1 + ex);
+    const sub = _layoutSingle([{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }], mpp, opts);
+    if (!sub) continue;
+    for (const st of sub.stalls) {
+      if (_bayInside(st, polygon) && !ov(st)) { stalls.push(st); boxes.push(_bboxOfPoints(st)); }
+    }
+    for (const al of sub.aisles) {
+      if (!ov(al)) { aisles.push(al); boxes.push(_bboxOfPoints(al)); }
+    }
+  }
+  return { count: stalls.length, stalls, aisles };
 }
 
 // Kullanıcı yolları elle taşıdıktan sonra: koridorları SABİT tutup

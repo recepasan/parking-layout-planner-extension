@@ -3,13 +3,13 @@
   "use strict";
   if (window.__otoparkPlannerLoaded) return;
   window.__otoparkPlannerLoaded = true;
-  console.log("[Otopark] içerik betiği yüklendi ✓");
+  console.log("[Parking Layout] content script loaded");
 
   const Z_CANVAS = 2147483646;
   const TILE = 256;
 
   // ---- Durum ----
-  let mode = "idle";        // idle | draw | gate-entry | gate-exit | road | road-delete
+  let mode = "idle";        // idle | draw | freehand | gate-entry | gate-exit | road | road-delete | addroad
   let polygonLL = [];       // [{lat,lng}] çizilen alan köşeleri
   let closed = false;
   let stallsLL = [];        // [[{lat,lng}*4], ...] hesaplanan park yerleri
@@ -23,6 +23,9 @@
   let aislesEdited = false; // yollar elle düzenlendi mi? (Hesapla'da sabit tut)
   let lastAngleDeg = 0;     // son tam optimizasyonun yön açısı (sınıflandırma için)
   let aisleSegsCache = [];  // koridor merkez çizgileri (bay'ın açık kenarını bulmak için)
+  let freehandActive = false; // serbest çizim sırasında basılı mı?
+  let freehandLastPx = null;  // son örneklenen serbest nokta (px)
+  let roadPoints = [];        // "Yol Ekle" için bükülebilir yol merkez noktaları (LL)
   // canlı kaydırma için
   let dragging = false, dragStart = null, dragDelta = { x: 0, y: 0 };
   let lastPointer = { x: 0, y: 0 };
@@ -85,54 +88,166 @@
     canvas.style.cursor = on ? (mode === "road" ? "grab" : mode === "road-delete" ? "not-allowed" : "crosshair") : "default";
   }
 
+  // ---- Dil / i18n (varsayılan: İngilizce) ----
+  const I18N = {
+    en: {
+      title: "🅿️ Parking Layout (Test)",
+      vertices: "Vertices", freehand: "Freehand", finish: "Finish",
+      stallW: "Stall width (m)", stallD: "Stall depth (m)", aisle: "Aisle (m)", angleStep: "Angle step (°)",
+      btb: "Back-to-back double", oneway: "One-way lane (3.5 m)",
+      fillEmpty: "Fill empty areas",
+      compute: "Compute Layout", clear: "Clear",
+      entryGate: "Entry Gate", exitGate: "Exit Gate",
+      addRoad: "Add Road", moveRoad: "Move Road", delRoad: "Delete Road",
+      scaleCalc: "Calculating scale…",
+      noLoc: "⚠ Location unreadable. Switch to top-down (2D) view.",
+      scaleInfo: (m, z) => `Scale: ${m} m/px · zoom ${z}`,
+      startHint: "Draw an area with 'Vertices' or 'Freehand'.",
+      startVertices: "Click corners. Return to the start point to close.",
+      startFreehand: "Hold and drag freely (oval/curved); release to close.",
+      startAddRoad: "Click points for a road (can bend). Double-click / Finish, then Compute.",
+      roadAdded: "Road added. 'Compute Layout' places stalls along it.",
+      areaReady: "Area ready. Press 'Compute Layout'.",
+      cleared: "Cleared. Start with 'Vertices' or 'Freehand'.",
+      gatePrompt: (g) => `Click the boundary for the ${g} gate; it snaps to the nearest edge.`,
+      startMoveRoad: "Drag a road, or grab yellow corners to resize. Esc to exit.",
+      startDelRoad: "Click the gray road to delete. Esc to exit.",
+      gatePlaced: (g) => `${g} gate set. You can recompute.`,
+      computed: "Computed. Stalls open onto connected drive aisles.",
+      roadMoved: "Road moved. 'Compute Layout' re-places stalls accordingly.",
+      roadDeleted: "Road deleted. 'Compute' re-places stalls along remaining roads.",
+      view3D: "3D/tilted view: returning to 2D re-aligns the layout.",
+      view3Dstatus: "Alignment paused in 3D. Return to 2D to fix.",
+      editClosed: "Editing closed.",
+      tooShort: "Too short; try again.",
+      needArea: "Draw an area first.",
+      need3: "At least 3 corners needed.",
+      finishAreaFirst: "Finish the area first.",
+      computeFirst: "Compute the layout first.",
+      gateTooFar: "Place the gate closer to the yellow boundary.",
+      noScale: "No location/scale.",
+      noLocDraw: "Location unreadable; switch to top-down 2D.",
+      roadNeed2: "A road needs at least 2 points.",
+      couldnt: "Couldn't compute.",
+      gateEntry: "Entry", gateExit: "Exit",
+      result: (n, ang, lane, area, per, ms) =>
+        `<b>${n}</b> accessible stalls<br>Orientation: ${ang}° · Lane: ${lane} m · Area: ${area} m²<br>Efficiency: 1 car / ${per} m² · ${ms} ms`,
+    },
+    tr: {
+      title: "🅿️ Otopark Yerleşim (Test)",
+      vertices: "Köşeli", freehand: "Serbest", finish: "Bitir",
+      stallW: "Park genişlik (m)", stallD: "Park derinlik (m)", aisle: "Koridor (m)", angleStep: "Açı adımı (°)",
+      btb: "Sırt sırta çift park", oneway: "Tek şerit yol (3.5 m)",
+      fillEmpty: "Boş alanları doldur",
+      compute: "Yerleşimi Hesapla", clear: "Temizle",
+      entryGate: "Giriş Kapısı", exitGate: "Çıkış Kapısı",
+      addRoad: "Yol Ekle", moveRoad: "Yol Taşı", delRoad: "Yol Sil",
+      scaleCalc: "Ölçek hesaplanıyor…",
+      noLoc: "⚠ Konum okunamadı. Üstten (2B) görünüme geçin.",
+      scaleInfo: (m, z) => `Ölçek: ${m} m/piksel · zoom ${z}`,
+      startHint: "'Köşeli' veya 'Serbest' ile bir alan çiz.",
+      startVertices: "Köşeleri tıkla. Başlangıç noktasına dönünce kapanır.",
+      startFreehand: "Basılı tutup serbestçe çiz (oval/eğri); bırakınca kapanır.",
+      startAddRoad: "Yol için noktalara tıkla (bükülebilir). Çift tık / Bitir, sonra Hesapla.",
+      roadAdded: "Yol eklendi. 'Yerleşimi Hesapla' park yerlerini bu yola göre dizer.",
+      areaReady: "Alan hazır. 'Yerleşimi Hesapla'ya bas.",
+      cleared: "Temizlendi. 'Köşeli' veya 'Serbest' ile başla.",
+      gatePrompt: (g) => `${g} kapısı için alan sınırına tıkla; nokta en yakın kenara oturur.`,
+      startMoveRoad: "Yolu taşı veya sarı köşelerden tutup boyutlandır. Escape ile çık.",
+      startDelRoad: "Silmek istediğin gri yola tıkla. Escape ile çık.",
+      gatePlaced: (g) => `${g} kapısı seçildi. Yerleşimi tekrar hesaplayabilirsin.`,
+      computed: "Hesaplandı. Park cepleri bağlı sürüş koridorlarına açılır.",
+      roadMoved: "Yol taşındı. 'Yerleşimi Hesapla' park yerlerini yeniden dizer.",
+      roadDeleted: "Yol silindi. 'Hesapla' kalan yollara göre yeniden dizer.",
+      view3D: "3B/eğik görünüm: 2B'ye dönünce yerleşim otomatik hizalanır.",
+      view3Dstatus: "3B görünümde hizalama duraklatıldı. 2B'ye dönünce düzelir.",
+      editClosed: "Düzenleme kapatıldı.",
+      tooShort: "Çok kısa; tekrar dene.",
+      needArea: "Önce bir alan çiz.",
+      need3: "En az 3 köşe gerekli.",
+      finishAreaFirst: "Önce alanı bitir.",
+      computeFirst: "Önce yerleşimi hesapla.",
+      gateTooFar: "Kapıyı sarı alan sınırına daha yakın seç.",
+      noScale: "Konum/ölçek yok.",
+      noLocDraw: "Konum okunamadı; üstten 2B görünüme geç.",
+      roadNeed2: "Yol için en az 2 nokta gerekli.",
+      couldnt: "Hesaplanamadı.",
+      gateEntry: "Giriş", gateExit: "Çıkış",
+      result: (n, ang, lane, area, per, ms) =>
+        `<b>${n}</b> erişilebilir araç kapasitesi<br>Yön: ${ang}° · Yol: ${lane} m · Alan: ${area} m²<br>Verim: 1 araç / ${per} m² · ${ms} ms`,
+    },
+  };
+  let lang = "en";
+  try { const s = localStorage.getItem("opl-lang"); if (s === "tr" || s === "en") lang = s; } catch (e) {}
+  const t = (k, ...a) => {
+    const v = (I18N[lang] && I18N[lang][k] != null) ? I18N[lang][k] : I18N.en[k];
+    return typeof v === "function" ? v(...a) : (v != null ? v : k);
+  };
+
   // ---- Panel ----
   const panel = document.createElement("div");
   panel.id = "opl-panel";
   panel.innerHTML = `
-    <h1>🅿️ Otopark Yerleşim (Test)</h1>
-    <div class="opl-scale" id="opl-scale">Ölçek hesaplanıyor…</div>
-    <div class="opl-row">
-      <button id="opl-draw">Alan Çiz</button>
-      <button id="opl-finish" class="opl-secondary">Bitir</button>
+    <div class="opl-head">
+      <h1 data-i18n="title"></h1>
+      <button id="opl-lang" class="opl-lang"></button>
     </div>
-	    <div class="opl-fields">
-	      <label>Park genişlik (m)<input id="opl-sw" type="number" step="0.1" value="2.5"></label>
-	      <label>Park derinlik (m)<input id="opl-sd" type="number" step="0.1" value="5.0"></label>
-	      <label>Koridor (m)<input id="opl-aw" type="number" step="0.1" value="6.0"></label>
-	      <label>Açı adımı (°)<input id="opl-as" type="number" step="5" value="10"></label>
-	    </div>
-	    <label class="opl-check"><input id="opl-btb" type="checkbox" checked> Sırt sırta çift park</label>
-	    <label class="opl-check"><input id="opl-singlelane" type="checkbox"> Tek şerit yol (3.5 m)</label>
-			    <div class="opl-row">
-		      <button id="opl-compute">Yerleşimi Hesapla</button>
-		      <button id="opl-clear" class="opl-danger">Temizle</button>
-	    </div>
-	    <div class="opl-row">
-	      <button id="opl-entry" class="opl-secondary">Giriş Kapısı</button>
-	      <button id="opl-exit" class="opl-secondary">Çıkış Kapısı</button>
-		    </div>
-		    <div class="opl-row">
-		      <button id="opl-roadedit" class="opl-secondary">Yol Taşı</button>
-		      <button id="opl-roaddelete" class="opl-danger">Yol Sil</button>
-		    </div>
-	    <div class="opl-result" id="opl-result" style="display:none"></div>
-    <div class="opl-status" id="opl-status">Önce "Alan Çiz" ile araziyi işaretle.</div>
+    <div class="opl-scale" id="opl-scale"></div>
+    <div class="opl-row">
+      <button id="opl-draw" data-i18n="vertices"></button>
+      <button id="opl-freehand" data-i18n="freehand"></button>
+      <button id="opl-finish" class="opl-secondary" data-i18n="finish"></button>
+    </div>
+    <div class="opl-fields">
+      <label><span data-i18n="stallW"></span><input id="opl-sw" type="number" step="0.1" value="2.5"></label>
+      <label><span data-i18n="stallD"></span><input id="opl-sd" type="number" step="0.1" value="5.0"></label>
+      <label><span data-i18n="aisle"></span><input id="opl-aw" type="number" step="0.1" value="6.0"></label>
+      <label><span data-i18n="angleStep"></span><input id="opl-as" type="number" step="5" value="10"></label>
+    </div>
+    <label class="opl-check"><input id="opl-btb" type="checkbox" checked> <span data-i18n="btb"></span></label>
+    <label class="opl-check"><input id="opl-singlelane" type="checkbox"> <span data-i18n="oneway"></span></label>
+    <label class="opl-check"><input id="opl-fillempty" type="checkbox"> <span data-i18n="fillEmpty"></span></label>
+    <div class="opl-row">
+      <button id="opl-compute" data-i18n="compute"></button>
+      <button id="opl-clear" class="opl-danger" data-i18n="clear"></button>
+    </div>
+    <div class="opl-row">
+      <button id="opl-entry" class="opl-secondary" data-i18n="entryGate"></button>
+      <button id="opl-exit" class="opl-secondary" data-i18n="exitGate"></button>
+    </div>
+    <div class="opl-row">
+      <button id="opl-roadadd" class="opl-secondary" data-i18n="addRoad"></button>
+      <button id="opl-roadedit" class="opl-secondary" data-i18n="moveRoad"></button>
+      <button id="opl-roaddelete" class="opl-danger" data-i18n="delRoad"></button>
+    </div>
+    <div class="opl-result" id="opl-result" style="display:none"></div>
+    <div class="opl-status" id="opl-status"></div>
   `;
   document.body.appendChild(panel);
-  console.log("[Otopark] panel eklendi ✓");
 
   const $ = (id) => panel.querySelector(id);
   const statusEl = $("#opl-status");
   const resultEl = $("#opl-result");
   const scaleEl = $("#opl-scale");
-  const setStatus = (t) => (statusEl.textContent = t);
+  const setStatus = (txt) => (statusEl.textContent = txt);
+
+  // Tüm statik etiketleri seçili dile göre güncelle.
+  function applyLang() {
+    panel.querySelectorAll("[data-i18n]").forEach((el) => {
+      el.textContent = t(el.getAttribute("data-i18n"));
+    });
+    const lb = $("#opl-lang");
+    if (lb) lb.textContent = lang === "en" ? "TR" : "EN";
+    updateScaleReadout();
+    if (result) renderResult();
+  }
 
   function updateScaleReadout() {
     if (!cam) {
-      scaleEl.textContent = "⚠ Konum okunamadı. Üstten (2B) görünüme geçin.";
+      scaleEl.textContent = t("noLoc");
       return;
     }
-    scaleEl.textContent = `Ölçek: ${mppFromCam(cam).toFixed(3)} m/piksel · zoom ${cam.zoom}`;
+    scaleEl.textContent = t("scaleInfo", mppFromCam(cam).toFixed(3), cam.zoom);
   }
 
   // ---- Toast ----
@@ -181,7 +296,7 @@
   }
 
   function gateLabel(type) {
-    return type === "entry" ? "Giriş" : "Çıkış";
+    return type === "entry" ? t("gateEntry") : t("gateExit");
   }
 
   function centroid(pts) {
@@ -214,10 +329,10 @@
     return lPx * mppFromCam(cam);
   }
 
-  function classifyStalls(stallsPx, angleDeg) {
+  function classifyStalls(stallsPx, angleDeg, mpp, gatePts) {
     const n = stallsPx.length;
     const types = stallsPx.map(() => "standard");
-    if (!n || !cam) return types;
+    if (!n) return types;
 
     // Bayları, yerleşim açısına göre döndürülmüş çerçevede konumlandır.
     // "aligned": iç (eksene hizalı) baylar; "değil": eğik kenar bayları.
@@ -234,7 +349,7 @@
 
     // 1) Sıralara böl (döndürülmüş ry'ye göre) ve peyzaj adalarını
     //    rastgele değil, uzun sıraların UÇLARINA yerleştir.
-    const pxPerM = 1 / mppFromCam(cam);
+    const pxPerM = 1 / mpp;
     const rowTol = (parseFloat($("#opl-sd").value) || 5) * pxPerM * 0.6;
     const sorted = info.filter((it) => it.aligned).sort((a, b) => a.ry - b.ry || a.rx - b.rx);
     const rows = [];
@@ -254,13 +369,14 @@
     }
 
     // 2) Engelli baylar: girişe (yoksa lotun ön kenarına) en yakın bitişik blok.
-    const entry = gatesLL.find((g) => g.type === "entry") || gatesLL[0];
+    const gpts = gatePts || [];
+    const entry = gpts.find((g) => g.type === "entry") || gpts[0];
     const frontBay = info.reduce((m, it) => (it.ry < m.ry ? it : m), info[0]);
-    const accAnchor = entry ? ll2px(entry.ll, cam) : frontBay.c;
+    const accAnchor = entry ? entry.point : frontBay.c;
     // EV baylar: çıkışa (yoksa karşı kenara) yakın ayrı bir blok.
-    const exit = gatesLL.find((g) => g.type === "exit");
+    const exit = gpts.find((g) => g.type === "exit");
     const sideBay = info.reduce((m, it) => (it.rx > m.rx ? it : m), info[0]);
-    const evAnchor = exit ? ll2px(exit.ll, cam) : sideBay.c;
+    const evAnchor = exit ? exit.point : sideBay.c;
 
     function tagNearest(anchor, count, type) {
       const cand = info
@@ -280,15 +396,15 @@
     return stallTypes.filter((t) => t !== "landscape").length || stallsLL.length;
   }
 
-  function refreshResultCount() {
+  function renderResult() {
     if (!result) return;
     const count = parkingCount();
-    result.count = count;
     const perCar = count ? (result.areaM2 / count).toFixed(1) : "—";
-    resultEl.innerHTML =
-      `<b>${count}</b> erişilebilir araç kapasitesi<br>` +
-      `Yön: ${result.angleDeg}° · Alan: ${result.areaM2.toFixed(0)} m²<br>` +
-      `Verim: 1 araç / ${perCar} m²`;
+    resultEl.innerHTML = t(
+      "result", count, result.angleDeg,
+      (result.laneM != null ? result.laneM : 0).toFixed(1),
+      result.areaM2.toFixed(0), perCar, result.ms != null ? result.ms : "—"
+    );
   }
 
   // Sürüş koridorunu (gri şerit + ölçü etiketi + tutamaçlar) çizer.
@@ -557,6 +673,30 @@
 	      for (const gate of gatesLL) drawGate(gate);
 	    }
 
+	    // "Yol Ekle" önizlemesi: bükülebilir yol merkez çizgisi + genişlik şeridi
+	    if (mode === "addroad" && roadPoints.length) {
+	      const rp = roadPoints.map((ll) => ll2px(ll, cam));
+	      const ends = cursor ? rp.concat([cursor]) : rp;
+	      const singleLane = $("#opl-singlelane").checked;
+	      const wM = singleLane ? 3.5 : (parseFloat($("#opl-aw").value) || 6.0);
+	      ctx.lineCap = "round"; ctx.lineJoin = "round";
+	      ctx.strokeStyle = "rgba(119,128,136,0.65)";
+	      ctx.lineWidth = wM / mppFromCam(cam);
+	      ctx.beginPath();
+	      ctx.moveTo(ends[0].x, ends[0].y);
+	      for (let i = 1; i < ends.length; i++) ctx.lineTo(ends[i].x, ends[i].y);
+	      ctx.stroke();
+	      ctx.strokeStyle = "rgba(255,235,120,0.9)";
+	      ctx.lineWidth = 1.5; ctx.setLineDash([8, 6]);
+	      ctx.beginPath();
+	      ctx.moveTo(ends[0].x, ends[0].y);
+	      for (let i = 1; i < ends.length; i++) ctx.lineTo(ends[i].x, ends[i].y);
+	      ctx.stroke();
+	      ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.lineJoin = "miter";
+	      ctx.fillStyle = "#ffd400";
+	      for (const p of rp) { ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 7); ctx.fill(); }
+	    }
+
 	    // Çizim halindeki alan
 	    if (!closed && polygonLL.length) {
 	      const pts = polygonLL.map((ll) => ll2px(ll, cam));
@@ -574,7 +714,7 @@
 	      ctx.stroke();
 	      ctx.setLineDash([]);
 	      ctx.fillStyle = "#ffd400";
-	      for (const p of pts) { ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 7); ctx.fill(); }
+	      if (mode !== "freehand") for (const p of pts) { ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 7); ctx.fill(); }
 	      if (pts.length >= 3) {
 	        ctx.beginPath();
 	        ctx.arc(pts[0].x, pts[0].y, canClose ? 9 : 7, 0, Math.PI * 2);
@@ -588,56 +728,100 @@
   }
 
   // ---- Aksiyonlar ----
-  function startDraw() {
-    if (!cam) { toast("Konum okunamadı; üstten 2B görünüme geç."); return; }
+  function resetAll() {
     polygonLL = []; closed = false; stallsLL = []; stallTypes = []; aislesLL = []; gatesLL = []; result = null;
-    aislesEdited = false;
+    aislesEdited = false; roadPoints = []; freehandActive = false; freehandLastPx = null;
     dragDelta = { x: 0, y: 0 }; canvas.style.transform = "";
     resultEl.style.display = "none";
+  }
+  function startDraw() {
+    if (!cam) { toast(t("noLocDraw")); return; }
+    resetAll();
     mode = "draw";
     setInteractive(true);
-    setStatus("Köşeleri tıkla. Başlangıç noktasına dönünce otomatik kapanır.");
+    setStatus(t("startVertices"));
+    redraw();
+  }
+  function startFreehand() {
+    if (!cam) { toast(t("noLocDraw")); return; }
+    resetAll();
+    mode = "freehand";
+    setInteractive(true);
+    setStatus(t("startFreehand"));
+    redraw();
+  }
+  function startAddRoad() {
+    if (!cam) { toast(t("noScale")); return; }
+    if (!closed || polygonLL.length < 3) { toast(t("needArea")); return; }
+    mode = "addroad";
+    roadPoints = [];
+    roadDrag = null;
+    setInteractive(true);
+    setStatus(t("startAddRoad"));
+    redraw();
+  }
+  function finishAddRoad() {
+    if (roadPoints.length < 2) { toast(t("roadNeed2")); roadPoints = []; mode = "idle"; setInteractive(false); redraw(); return; }
+    const singleLane = $("#opl-singlelane").checked;
+    const wM = singleLane ? 3.5 : (parseFloat($("#opl-aw").value) || 6.0);
+    const halfPx = (wM / mppFromCam(cam)) / 2;
+    // Her segmenti, genişliği koridor kadar olan bir dikdörtgen (quad) yap.
+    for (let i = 0; i < roadPoints.length - 1; i++) {
+      const p0 = ll2px(roadPoints[i], cam);
+      const p1 = ll2px(roadPoints[i + 1], cam);
+      const dx = p1.x - p0.x, dy = p1.y - p0.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len * halfPx, ny = dx / len * halfPx; // dik normal
+      const quad = [
+        { x: p0.x + nx, y: p0.y + ny }, { x: p1.x + nx, y: p1.y + ny },
+        { x: p1.x - nx, y: p1.y - ny }, { x: p0.x - nx, y: p0.y - ny },
+      ];
+      aislesLL.push(quad.map((p) => px2ll(p.x, p.y, cam)));
+    }
+    aislesEdited = true;
+    roadPoints = [];
+    mode = "idle";
+    setInteractive(false);
+    setStatus(t("roadAdded"));
     redraw();
   }
   function finishPolygon() {
-    if (polygonLL.length < 3) { toast("En az 3 köşe gerekli."); return; }
+    if (polygonLL.length < 3) { toast(t("need3")); return; }
     closed = true;
     mode = "idle";
     setInteractive(false);
-    setStatus("Alan hazır. 'Yerleşimi Hesapla'ya bas.");
+    setStatus(t("areaReady"));
     redraw();
   }
   function clearAll() {
-    polygonLL = []; closed = false; stallsLL = []; stallTypes = []; aislesLL = []; gatesLL = []; result = null;
-    aislesEdited = false;
+    resetAll();
     mode = "idle";
     setInteractive(false);
-    resultEl.style.display = "none";
-    setStatus("Temizlendi. 'Alan Çiz' ile yeniden başla.");
+    setStatus(t("cleared"));
     redraw();
   }
   function startGate(type) {
-    if (!closed || polygonLL.length < 3) { toast("Önce alanı bitir."); return; }
+    if (!closed || polygonLL.length < 3) { toast(t("finishAreaFirst")); return; }
     mode = type === "entry" ? "gate-entry" : "gate-exit";
     roadDrag = null;
     setInteractive(true);
-    setStatus(`${gateLabel(type)} için alan sınırına tıkla; nokta en yakın kenara oturur.`);
+    setStatus(t("gatePrompt", gateLabel(type)));
     redraw();
   }
   function startRoadEdit() {
-    if (!aislesLL.length) { toast("Önce yerleşimi hesapla."); return; }
+    if (!aislesLL.length) { toast(t("computeFirst")); return; }
     mode = "road";
     roadDrag = null;
     setInteractive(true);
-    setStatus("Yolu taşı veya sarı köşelerden tutup boyunu/genişliğini ayarla. Escape ile çık.");
+    setStatus(t("startMoveRoad"));
     redraw();
   }
   function startRoadDelete() {
-    if (!aislesLL.length) { toast("Önce yerleşimi hesapla."); return; }
+    if (!aislesLL.length) { toast(t("computeFirst")); return; }
     mode = "road-delete";
     roadDrag = null;
     setInteractive(true);
-    setStatus("Silmek istediğin gri yola tıkla. Escape ile çık.");
+    setStatus(t("startDelRoad"));
     redraw();
   }
   function placeGate(type, pt) {
@@ -645,58 +829,70 @@
     const poly = polygonLL.map((ll) => ll2px(ll, cam));
     const snapped = nearestBoundaryPoint(pt, poly);
     if (!snapped || snapped.dist > 36) {
-      toast("Kapıyı sarı alan sınırına daha yakın seç.");
+      toast(t("gateTooFar"));
       return;
     }
     const ll = px2ll(snapped.x, snapped.y, cam);
     gatesLL = gatesLL.filter((g) => g.type !== type).concat({ type, ll });
-    setStatus(`${gateLabel(type)} kapısı seçildi. Yerleşimi tekrar hesaplayabilirsin.`);
+    setStatus(t("gatePlaced", gateLabel(type)));
     mode = "idle";
     setInteractive(false);
     redraw();
   }
 	  function compute() {
-	    if (!closed || polygonLL.length < 3) { toast("Önce bir alan çiz."); return; }
-	    if (!cam) { toast("Konum/ölçek yok."); return; }
-	    const mpp = mppFromCam(cam);
+	    if (!closed || polygonLL.length < 3) { toast(t("needArea")); return; }
+	    if (!cam) { toast(t("noScale")); return; }
 	    const singleLane = $("#opl-singlelane").checked;
 	    const aisleWidthM = singleLane ? 3.5 : (parseFloat($("#opl-aw").value) || 6.0);
+
+	    // --- ZOOM'DAN BAĞIMSIZ sabit referans ölçek ---
+	    // Hesabı her zaman aynı ölçekte yap; sonuç görüntü zoom'una göre değişmesin.
+	    const REF_ZOOM = 20;
+	    const REF = TILE * Math.pow(2, REF_ZOOM);
+	    const refLat = polygonLL[0].lat;
+	    const mppRef = (156543.03392 * Math.cos((refLat * Math.PI) / 180)) / Math.pow(2, REF_ZOOM);
+	    const o = project(polygonLL[0].lat, polygonLL[0].lng, REF); // yerel köken (global mercator px)
+	    const toL = (ll) => { const w = project(ll.lat, ll.lng, REF); return { x: w.x - o.x, y: w.y - o.y }; };
+	    const fromL = (p) => {
+	      const gx = p.x + o.x, gy = p.y + o.y;
+	      const lng = (gx / REF) * 360 - 180;
+	      const latRad = 2 * Math.atan(Math.exp(Math.PI * (1 - (2 * gy) / REF))) - Math.PI / 2;
+	      return { lat: (latRad * 180) / Math.PI, lng };
+	    };
+
 	    const opts = {
 	      stallWidthM: parseFloat($("#opl-sw").value) || 2.5,
 	      stallDepthM: parseFloat($("#opl-sd").value) || 5.0,
 	      aisleWidthM,
 	      angleStepDeg: Math.max(5, parseFloat($("#opl-as").value) || 15),
-	      gates: gatesLL.map((g) => ({ type: g.type, point: ll2px(g.ll, cam) })),
+	      gates: gatesLL.map((g) => ({ type: g.type, point: toL(g.ll) })),
 	      backToBack: $("#opl-btb").checked,
+	      fillEmpty: $("#opl-fillempty").checked,
 	    };
-    const polyPx = polygonLL.map((ll) => ll2px(ll, cam));
+    const polyRef = polygonLL.map(toL);
     const t0 = performance.now();
     let r;
     if (aislesEdited && aislesLL.length) {
       // Yollar elle düzenlendi → koridorları sabit tut, bayları yeniden diz.
-      const aisleQuads = aislesLL.map((a) => a.map((ll) => ll2px(ll, cam)));
-      r = fillBaysForAisles(polyPx, mpp, opts, aisleQuads);
+      const aisleQuads = aislesLL.map((a) => a.map(toL));
+      r = fillBaysForAisles(polyRef, mppRef, opts, aisleQuads);
       if (r) r.angleDeg = lastAngleDeg;
     } else {
-      r = computeBestLayout(polyPx, mpp, opts);
+      r = computeBestLayout(polyRef, mppRef, opts);
       if (r) lastAngleDeg = r.angleDeg;
     }
     const ms = (performance.now() - t0).toFixed(0);
-    if (!r) { toast("Hesaplanamadı."); return; }
-    // Park yerlerini coğrafi koordinata çevirerek sakla (sabitleme için)
-    stallsLL = r.stalls.map((st) => st.map((p) => px2ll(p.x, p.y, cam)));
-    stallTypes = classifyStalls(r.stalls, r.angleDeg);
-    aislesLL = r.aisles.map((a) => a.map((p) => px2ll(p.x, p.y, cam)));
+    if (!r) { toast(t("couldnt")); return; }
+    // Sonuçları referans çerçeveden coğrafi koordinata çevirerek sakla.
+    stallsLL = r.stalls.map((st) => st.map(fromL));
+    stallTypes = classifyStalls(r.stalls, r.angleDeg, mppRef, opts.gates);
+    aislesLL = r.aisles.map((a) => a.map(fromL));
     const effectiveCount = parkingCount();
-    result = { count: effectiveCount, angleDeg: r.angleDeg, areaM2: r.areaM2 };
+    result = { count: effectiveCount, angleDeg: r.angleDeg, areaM2: r.areaM2, laneM: aisleWidthM, ms };
     redraw();
-    const perCar = effectiveCount ? (r.areaM2 / effectiveCount).toFixed(1) : "—";
     resultEl.style.display = "block";
-	    resultEl.innerHTML =
-	      `<b>${effectiveCount}</b> erişilebilir araç kapasitesi<br>` +
-	      `Yön: ${r.angleDeg}° · Yol: ${aisleWidthM.toFixed(1)} m · Alan: ${r.areaM2.toFixed(0)} m²<br>` +
-	      `Verim: 1 araç / ${perCar} m² · ${ms} ms`;
-    setStatus("Hesaplandı. Park cepleri bağlı sürüş koridorlarına açılır.");
+    renderResult();
+    setStatus(t("computed"));
   }
 
   // ---- Canvas olayları (çizim) ----
@@ -741,6 +937,11 @@
 	      redraw();
 	      return;
 	    }
+    if (mode === "addroad") {
+      roadPoints.push(px2ll(e.clientX, e.clientY, cam));
+      redraw();
+      return;
+    }
     if (mode === "gate-entry" || mode === "gate-exit") {
       placeGate(mode === "gate-entry" ? "entry" : "exit", { x: e.clientX, y: e.clientY });
       return;
@@ -750,12 +951,23 @@
       if (index < 0) return;
       aislesLL.splice(index, 1);
       aislesEdited = true;
-      setStatus("Yol silindi. 'Hesapla' kalan yollara göre park yerlerini yeniden dizer.");
+      setStatus(t("roadDeleted"));
       redraw();
       return;
     }
   });
 	  canvas.addEventListener("pointerdown", (e) => {
+	    if (mode === "freehand" && cam && e.button === 0) {
+	      e.preventDefault();
+	      canvas.setPointerCapture(e.pointerId);
+	      freehandActive = true;
+	      const p = { x: e.clientX, y: e.clientY };
+	      polygonLL = [px2ll(p.x, p.y, cam)];
+	      freehandLastPx = p;
+	      closed = false;
+	      redraw();
+	      return;
+	    }
 	    if (mode !== "road" || !cam || e.button !== 0) return;
 	    const pt = { x: e.clientX, y: e.clientY };
 	    const cornerHit = hitAisleCorner(pt);
@@ -776,9 +988,20 @@
 	    };
 	  });
   canvas.addEventListener("pointermove", (e) => {
-	    if (mode === "draw") {
+	    if (mode === "freehand") {
 	      cursor = { x: e.clientX, y: e.clientY };
-	      canvas.style.cursor = isNearStart(cursor) ? "pointer" : "crosshair";
+	      if (freehandActive && cam) {
+	        if (!freehandLastPx || Math.hypot(e.clientX - freehandLastPx.x, e.clientY - freehandLastPx.y) > 5) {
+	          polygonLL.push(px2ll(e.clientX, e.clientY, cam));
+	          freehandLastPx = { x: e.clientX, y: e.clientY };
+	        }
+	      }
+	      redraw();
+	      return;
+	    }
+	    if (mode === "draw" || mode === "addroad") {
+	      cursor = { x: e.clientX, y: e.clientY };
+	      canvas.style.cursor = (mode === "draw" && isNearStart(cursor)) ? "pointer" : "crosshair";
 	      redraw();
 	      return;
 	    }
@@ -807,27 +1030,40 @@
 	    }
 	    redraw();
 	  });
-  canvas.addEventListener("dblclick", () => { if (mode === "draw") finishPolygon(); });
+  canvas.addEventListener("dblclick", () => {
+    if (mode === "draw") finishPolygon();
+    else if (mode === "addroad") finishAddRoad();
+  });
   canvas.addEventListener("pointerup", (e) => {
+    if (mode === "freehand" && freehandActive) {
+      freehandActive = false;
+      if (polygonLL.length >= 3) finishPolygon();
+      else { setStatus(t("tooShort")); redraw(); }
+      return;
+    }
     if (!roadDrag || roadDrag.pointerId !== e.pointerId) return;
     roadDrag = null;
     aislesEdited = true; // yol elle taşındı → Hesapla'da sabit tut
-    setStatus("Yol taşındı. 'Yerleşimi Hesapla' park yerlerini bu yola göre yeniden dizer.");
+    setStatus(t("roadMoved"));
     canvas.style.cursor = mode === "road" ? "grab" : "default";
   });
   canvas.addEventListener("pointercancel", () => {
     roadDrag = null;
+    freehandActive = false;
     canvas.style.cursor = mode === "road" ? "grab" : "default";
   });
 
   // ---- Klavye ----
   window.addEventListener("keydown", (e) => {
     if (mode === "draw" && e.key === "Enter") finishPolygon();
+    if (mode === "addroad" && e.key === "Enter") finishAddRoad();
     if (e.key === "Escape" && mode !== "idle") {
       mode = "idle";
       roadDrag = null;
+      roadPoints = [];
+      freehandActive = false;
       setInteractive(false);
-      setStatus("Düzenleme kapatıldı.");
+      setStatus(t("editClosed"));
       redraw();
     }
   });
@@ -847,8 +1083,19 @@
   window.addEventListener("pointerup", () => { dragging = false; }, true);
 
   // ---- Panel butonları ----
+  $("#opl-lang").addEventListener("click", () => {
+    lang = lang === "en" ? "tr" : "en";
+    try { localStorage.setItem("opl-lang", lang); } catch (e) {}
+    applyLang();
+    setStatus(closed ? t("areaReady") : t("startHint"));
+  });
   $("#opl-draw").addEventListener("click", startDraw);
-  $("#opl-finish").addEventListener("click", finishPolygon);
+  $("#opl-freehand").addEventListener("click", startFreehand);
+  $("#opl-roadadd").addEventListener("click", startAddRoad);
+  $("#opl-finish").addEventListener("click", () => {
+    if (mode === "addroad") finishAddRoad();
+    else finishPolygon();
+  });
   $("#opl-clear").addEventListener("click", clearAll);
   $("#opl-compute").addEventListener("click", compute);
   $("#opl-entry").addEventListener("click", () => startGate("entry"));
@@ -874,13 +1121,15 @@
     } else if ((polygonLL.length || stallsLL.length) && !warned3D) {
       // 3B/eğik görünüm: düz projeksiyon hizalanamaz → son konumda dondur, silme
       warned3D = true;
-      toast("3B/eğik görünüm: 2B'ye dönünce yerleşim otomatik hizalanır.");
-      setStatus("3B görünümde hizalama duraklatıldı. 2B'ye dönünce düzelir.");
+      toast(t("view3D"));
+      setStatus(t("view3Dstatus"));
     }
     requestAnimationFrame(tick);
   }
 
   // ---- Başlat ----
+  applyLang();
+  setStatus(t("startHint"));
   resize();
   cam = getCamera();
   updateScaleReadout();
