@@ -136,3 +136,56 @@
   pointer-events: none;
 }
 #opl-toast.opl-show { opacity: 1; }
+
+
+/* TKGM seçili-parsel adaptörü */
+#opl-panel.opl-tkgm {
+  top: 72px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+#opl-panel .opl-source {
+  margin: 8px 0;
+  padding: 6px 8px;
+  color: #b8c7db;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+#opl-panel .opl-selected {
+  min-height: 30px;
+  margin: 0 0 10px;
+  padding: 7px 8px;
+  color: #e5edf8;
+  background: rgba(250, 204, 21, 0.1);
+  border: 1px solid rgba(250, 204, 21, 0.24);
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+#opl-panel button.opl-wide {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+}
+#opl-panel button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.55);
+  opacity: 0.5;
+}
+
+#opl-panel[popover] {
+  left: auto;
+  bottom: auto;
+  margin: 0;
+  border: 0;
+}
+#opl-toast[popover] {
+  top: auto;
+  right: auto;
+  margin: 0;
+  border: 0;
+}

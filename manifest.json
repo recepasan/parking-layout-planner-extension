@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Parking Layout Planner (Experimental)",
-  "version": "0.1.0",
-  "description": "Draw a lot on Google Maps and visualize an efficient parking layout at real metric scale. Bilingual (EN/TR).",
+  "version": "0.2.0",
+  "description": "Generate local parking-layout overlays for drawn Google Maps areas or the parcel selected on TKGM Parsel Sorgu. Bilingual (EN/TR).",
   "content_scripts": [
     {
       "matches": [
@@ -11,6 +11,18 @@
         "https://maps.google.com/*"
       ],
       "js": ["layout.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://parselsorgu.tkgm.gov.tr/*"],
+      "js": ["tkgm-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://parselsorgu.tkgm.gov.tr/*"],
+      "js": ["tkgm-geometry.js", "layout.js", "tkgm-content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"
     }
