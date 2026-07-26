@@ -113,7 +113,8 @@
       startMoveRoad: "Drag a road, or grab yellow corners to resize. Esc to exit.",
       startDelRoad: "Click the gray road to delete. Esc to exit.",
       gatePlaced: (g) => `${g} gate set. You can recompute.`,
-      computed: "Computed. Stalls open onto connected drive aisles.",
+      computed: "Computed.",
+      computedConnected: "Computed. Parking spaces open onto a connected drive-aisle network.",
       roadMoved: "Road moved. 'Compute Layout' re-places stalls accordingly.",
       roadDeleted: "Road deleted. 'Compute' re-places stalls along remaining roads.",
       view3D: "3D/tilted view: returning to 2D re-aligns the layout.",
@@ -129,9 +130,14 @@
       noLocDraw: "Location unreadable; switch to top-down 2D.",
       roadNeed2: "A road needs at least 2 points.",
       couldnt: "Couldn't compute.",
+      invalidArea: "Couldn't compute: the area is invalid, self-intersecting, too small, or exceeds the calculation budget.",
+      invalidNumber: (label, min, max) => `${label} must be a finite number from ${min} to ${max}.`,
+      warningDisconnected: (stalls, aisles) => `Disconnected components were removed (${stalls} spaces, ${aisles} aisles).`,
+      warningOutside: (stalls, aisles) => `Geometry outside the parcel was removed (${stalls} spaces, ${aisles} aisles).`,
+      warningUnknown: "The layout engine returned a warning.",
       gateEntry: "Entry", gateExit: "Exit",
-      result: (n, ang, lane, area, per, ms) =>
-        `<b>${n}</b> accessible stalls<br>Orientation: ${ang}° · Lane: ${lane} m · Area: ${area} m²<br>Efficiency: 1 car / ${per} m² · ${ms} ms`,
+      result: (n, accessible, ev, ang, lane, area, per, ms, warning) =>
+        `<b>${n}</b> total parking spaces<br>Estimated marked: ${accessible} accessible · ${ev} EV<br>Orientation: ${ang}° · Lane: ${lane} m · Area: ${area} m²<br>Efficiency: 1 car / ${per} m² · ${ms} ms${warning ? `<br>⚠ ${warning}` : ""}`,
     },
     tr: {
       title: "🅿️ Otopark Yerleşim (Test)",
@@ -156,7 +162,8 @@
       startMoveRoad: "Yolu taşı veya sarı köşelerden tutup boyutlandır. Escape ile çık.",
       startDelRoad: "Silmek istediğin gri yola tıkla. Escape ile çık.",
       gatePlaced: (g) => `${g} kapısı seçildi. Yerleşimi tekrar hesaplayabilirsin.`,
-      computed: "Hesaplandı. Park cepleri bağlı sürüş koridorlarına açılır.",
+      computed: "Hesaplandı.",
+      computedConnected: "Hesaplandı. Park yerleri bağlı bir sürüş koridoru ağına açılır.",
       roadMoved: "Yol taşındı. 'Yerleşimi Hesapla' park yerlerini yeniden dizer.",
       roadDeleted: "Yol silindi. 'Hesapla' kalan yollara göre yeniden dizer.",
       view3D: "3B/eğik görünüm: 2B'ye dönünce yerleşim otomatik hizalanır.",
@@ -172,9 +179,14 @@
       noLocDraw: "Konum okunamadı; üstten 2B görünüme geç.",
       roadNeed2: "Yol için en az 2 nokta gerekli.",
       couldnt: "Hesaplanamadı.",
+      invalidArea: "Hesaplanamadı: alan geçersiz, kendiyle kesişiyor, çok küçük veya hesaplama bütçesini aşıyor.",
+      invalidNumber: (label, min, max) => `${label}, ${min} ile ${max} arasında sonlu bir sayı olmalı.`,
+      warningDisconnected: (stalls, aisles) => `Bağlantısız bileşenler kaldırıldı (${stalls} park yeri, ${aisles} koridor).`,
+      warningOutside: (stalls, aisles) => `Parsel dışındaki geometri kaldırıldı (${stalls} park yeri, ${aisles} koridor).`,
+      warningUnknown: "Yerleşim motoru bir uyarı döndürdü.",
       gateEntry: "Giriş", gateExit: "Çıkış",
-      result: (n, ang, lane, area, per, ms) =>
-        `<b>${n}</b> erişilebilir araç kapasitesi<br>Yön: ${ang}° · Yol: ${lane} m · Alan: ${area} m²<br>Verim: 1 araç / ${per} m² · ${ms} ms`,
+      result: (n, accessible, ev, ang, lane, area, per, ms, warning) =>
+        `<b>${n}</b> toplam park yeri<br>Tahmini işaretli: ${accessible} erişilebilir · ${ev} EV<br>Yön: ${ang}° · Yol: ${lane} m · Alan: ${area} m²<br>Verim: 1 araç / ${per} m² · ${ms} ms${warning ? `<br>⚠ ${warning}` : ""}`,
     },
   };
   let lang = "en";
@@ -199,10 +211,10 @@
       <button id="opl-finish" class="opl-secondary" data-i18n="finish"></button>
     </div>
     <div class="opl-fields">
-      <label><span data-i18n="stallW"></span><input id="opl-sw" type="number" step="0.1" value="2.5"></label>
-      <label><span data-i18n="stallD"></span><input id="opl-sd" type="number" step="0.1" value="5.0"></label>
-      <label><span data-i18n="aisle"></span><input id="opl-aw" type="number" step="0.1" value="6.0"></label>
-      <label><span data-i18n="angleStep"></span><input id="opl-as" type="number" step="5" value="10"></label>
+      <label><span data-i18n="stallW"></span><input id="opl-sw" type="number" min="1.8" max="4" step="0.1" value="2.5"></label>
+      <label><span data-i18n="stallD"></span><input id="opl-sd" type="number" min="3.5" max="9" step="0.1" value="5.0"></label>
+      <label><span data-i18n="aisle"></span><input id="opl-aw" type="number" min="2.5" max="15" step="0.1" value="6.0"></label>
+      <label><span data-i18n="angleStep"></span><input id="opl-as" type="number" min="1" max="45" step="1" value="10"></label>
     </div>
     <label class="opl-check"><input id="opl-btb" type="checkbox" checked> <span data-i18n="btb"></span></label>
     <label class="opl-check"><input id="opl-singlelane" type="checkbox"> <span data-i18n="oneway"></span></label>
@@ -230,6 +242,36 @@
   const resultEl = $("#opl-result");
   const scaleEl = $("#opl-scale");
   const setStatus = (txt) => (statusEl.textContent = txt);
+
+  const INPUT_SPECS = [
+    { selector: "#opl-sw", key: "stallWidthM", label: "stallW", min: 1.8, max: 4 },
+    { selector: "#opl-sd", key: "stallDepthM", label: "stallD", min: 3.5, max: 9 },
+    { selector: "#opl-aw", key: "aisleWidthM", label: "aisle", min: 2.5, max: 15 },
+    { selector: "#opl-as", key: "angleStepDeg", label: "angleStep", min: 1, max: 45 },
+  ];
+
+  // Sayısal seçenekler yalnız bu kapıdan geçer; parseFloat/fallback geçersiz
+  // (negatif, sonsuz veya aşırı küçük) girdileri motora sızdıramaz.
+  function readNumericInputs(reportInvalid) {
+    const values = {};
+    for (const spec of INPUT_SPECS) {
+      const input = $(spec.selector);
+      const value = Number(input.value);
+      const valid = Number.isFinite(value) && value >= spec.min && value <= spec.max;
+      input.setCustomValidity(valid ? "" : t("invalidNumber", t(spec.label), spec.min, spec.max));
+      if (!valid) {
+        if (reportInvalid) {
+          const message = t("invalidNumber", t(spec.label), spec.min, spec.max);
+          setStatus(message);
+          toast(message);
+          input.focus();
+        }
+        return null;
+      }
+      values[spec.key] = value;
+    }
+    return values;
+  }
 
   // Tüm statik etiketleri seçili dile göre güncelle.
   function applyLang() {
@@ -329,10 +371,10 @@
     return lPx * mppFromCam(cam);
   }
 
-  function classifyStalls(stallsPx, angleDeg, mpp, gatePts) {
+  function classifyStalls(stallsPx, angleDeg, mpp, gatePts, options) {
     const n = stallsPx.length;
     const types = stallsPx.map(() => "standard");
-    if (!n) return types;
+    if (!n) return { types, metadata: { totalParking: 0, accessible: 0, ev: 0, landscape: 0 } };
 
     // Bayları, yerleşim açısına göre döndürülmüş çerçevede konumlandır.
     // "aligned": iç (eksene hizalı) baylar; "değil": eğik kenar bayları.
@@ -350,7 +392,7 @@
     // 1) Sıralara böl (döndürülmüş ry'ye göre) ve peyzaj adalarını
     //    rastgele değil, uzun sıraların UÇLARINA yerleştir.
     const pxPerM = 1 / mpp;
-    const rowTol = (parseFloat($("#opl-sd").value) || 5) * pxPerM * 0.6;
+    const rowTol = options.stallDepthM * pxPerM * 0.6;
     const sorted = info.filter((it) => it.aligned).sort((a, b) => a.ry - b.ry || a.rx - b.rx);
     const rows = [];
     let cur = [];
@@ -380,7 +422,7 @@
 
     function tagNearest(anchor, count, type) {
       const cand = info
-        .filter((it) => it.aligned && types[it.index] === "standard")
+        .filter((it) => types[it.index] === "standard")
         .sort((a, b) =>
           Math.hypot(a.c.x - anchor.x, a.c.y - anchor.y) -
           Math.hypot(b.c.x - anchor.x, b.c.y - anchor.y));
@@ -389,22 +431,42 @@
     tagNearest(accAnchor, Math.min(8, Math.max(4, Math.ceil(n * 0.04))), "accessible");
     tagNearest(evAnchor, Math.min(12, Math.max(4, Math.ceil(n * 0.06))), "ev");
 
-    return types;
+    const countType = (type) => types.filter((value) => value === type).length;
+    const landscape = countType("landscape");
+    return {
+      types,
+      metadata: {
+        totalParking: n - landscape,
+        accessible: countType("accessible"),
+        ev: countType("ev"),
+        landscape,
+      },
+    };
   }
 
   function parkingCount() {
-    return stallTypes.filter((t) => t !== "landscape").length || stallsLL.length;
+    const classified = stallTypes.filter((type) => type !== "landscape").length;
+    return stallTypes.length === stallsLL.length ? classified : stallsLL.length;
   }
 
   function renderResult() {
     if (!result) return;
-    const count = parkingCount();
+    const classification = result.classification || {};
+    const count = Number.isFinite(classification.totalParking) ? classification.totalParking : parkingCount();
     const perCar = count ? (result.areaM2 / count).toFixed(1) : "—";
+    const warning = (result.warnings || []).map(localizeWarning).join(" ");
     resultEl.innerHTML = t(
-      "result", count, result.angleDeg,
+      "result", count, classification.accessible || 0, classification.ev || 0, result.angleDeg,
       (result.laneM != null ? result.laneM : 0).toFixed(1),
-      result.areaM2.toFixed(0), perCar, result.ms != null ? result.ms : "—"
+      result.areaM2.toFixed(0), perCar, result.ms != null ? result.ms : "—", warning
     );
+  }
+
+  function localizeWarning(warning) {
+    if (!warning || !warning.code) return t("warningUnknown");
+    if (warning.code === "DISCONNECTED_NETWORK_PRUNED") return t("warningDisconnected", warning.stalls || 0, warning.aisles || 0);
+    if (warning.code === "OUTSIDE_POLYGON_PRUNED") return t("warningOutside", warning.stalls || 0, warning.aisles || 0);
+    return t("warningUnknown");
   }
 
   // Sürüş koridorunu (gri şerit + ölçü etiketi + tutamaçlar) çizer.
@@ -576,15 +638,36 @@
   // Kapıyı en yakın sürüş koridoruna bağlayan erişim yolu + yön oku.
   function drawGateAccess(gate, g) {
     if (!aislesLL.length) return;
+    const verifiedTarget = gate.type === "entry" && result && result.gateAccess
+      ? ll2px(result.gateAccess, cam)
+      : null;
     let best = null;
     for (const aLL of aislesLL) {
       const a = aLL.map((ll) => ll2px(ll, cam));
-      const m1 = { x: (a[0].x + a[3].x) / 2, y: (a[0].y + a[3].y) / 2 };
-      const m2 = { x: (a[1].x + a[2].x) / 2, y: (a[1].y + a[2].y) / 2 };
-      const np = segNearest(g, m1, m2);
-      const d = dist(g, np);
-      const w = (dist(a[0], a[3]) + dist(a[1], a[2])) / 2;
-      if (!best || d < best.d) best = { d, np, w };
+      const side01 = (dist(a[0], a[1]) + dist(a[3], a[2])) / 2;
+      const side03 = (dist(a[0], a[3]) + dist(a[1], a[2])) / 2;
+      const along01 = side01 >= side03;
+      const m1 = along01
+        ? { x: (a[0].x + a[3].x) / 2, y: (a[0].y + a[3].y) / 2 }
+        : { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2 };
+      const m2 = along01
+        ? { x: (a[1].x + a[2].x) / 2, y: (a[1].y + a[2].y) / 2 }
+        : { x: (a[3].x + a[2].x) / 2, y: (a[3].y + a[2].y) / 2 };
+      const w = Math.min(side01, side03);
+      if (verifiedTarget) {
+        let edgeDistance = Infinity;
+        for (let i = 0; i < 4; i++) {
+          const nearest = segNearest(verifiedTarget, a[i], a[(i + 1) % 4]);
+          edgeDistance = Math.min(edgeDistance, dist(verifiedTarget, nearest));
+        }
+        if (!best || edgeDistance < best.edgeDistance) {
+          best = { d: dist(g, verifiedTarget), np: verifiedTarget, w, edgeDistance };
+        }
+      } else {
+        const np = segNearest(g, m1, m2);
+        const d = dist(g, np);
+        if (!best || d < best.d) best = { d, np, w };
+      }
     }
     if (!best) return;
     ctx.save();
@@ -678,7 +761,9 @@
 	      const rp = roadPoints.map((ll) => ll2px(ll, cam));
 	      const ends = cursor ? rp.concat([cursor]) : rp;
 	      const singleLane = $("#opl-singlelane").checked;
-	      const wM = singleLane ? 3.5 : (parseFloat($("#opl-aw").value) || 6.0);
+	      const numeric = readNumericInputs(false);
+	      const wM = singleLane ? 3.5 : (numeric && numeric.aisleWidthM);
+	      if (!Number.isFinite(wM)) return;
 	      ctx.lineCap = "round"; ctx.lineJoin = "round";
 	      ctx.strokeStyle = "rgba(119,128,136,0.65)";
 	      ctx.lineWidth = wM / mppFromCam(cam);
@@ -728,6 +813,17 @@
   }
 
   // ---- Aksiyonlar ----
+  function clearComputedLayout() {
+    stallsLL = [];
+    stallTypes = [];
+    // Elle düzenlenen yollar hesap girdisidir; geçersiz seçenek/sonuç yüzünden
+    // kaybolmaz. Otomatik üretilmiş eski koridorlar ise stale görünmesin.
+    if (!aislesEdited) aislesLL = [];
+    result = null;
+    resultEl.style.display = "none";
+    redraw();
+  }
+
   function resetAll() {
     polygonLL = []; closed = false; stallsLL = []; stallTypes = []; aislesLL = []; gatesLL = []; result = null;
     aislesEdited = false; roadPoints = []; freehandActive = false; freehandLastPx = null;
@@ -753,6 +849,7 @@
   function startAddRoad() {
     if (!cam) { toast(t("noScale")); return; }
     if (!closed || polygonLL.length < 3) { toast(t("needArea")); return; }
+    if (!readNumericInputs(true)) return;
     mode = "addroad";
     roadPoints = [];
     roadDrag = null;
@@ -762,22 +859,35 @@
   }
   function finishAddRoad() {
     if (roadPoints.length < 2) { toast(t("roadNeed2")); roadPoints = []; mode = "idle"; setInteractive(false); redraw(); return; }
+    const numeric = readNumericInputs(true);
+    if (!numeric) return;
     const singleLane = $("#opl-singlelane").checked;
-    const wM = singleLane ? 3.5 : (parseFloat($("#opl-aw").value) || 6.0);
+    const wM = singleLane ? 3.5 : numeric.aisleWidthM;
     const halfPx = (wM / mppFromCam(cam)) / 2;
-    // Her segmenti, genişliği koridor kadar olan bir dikdörtgen (quad) yap.
+    // Her geçerli segmenti, genişliği koridor kadar olan bir dikdörtgen (quad) yap.
+    const added = [];
     for (let i = 0; i < roadPoints.length - 1; i++) {
       const p0 = ll2px(roadPoints[i], cam);
       const p1 = ll2px(roadPoints[i + 1], cam);
       const dx = p1.x - p0.x, dy = p1.y - p0.y;
-      const len = Math.hypot(dx, dy) || 1;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.75) continue;
       const nx = -dy / len * halfPx, ny = dx / len * halfPx; // dik normal
       const quad = [
         { x: p0.x + nx, y: p0.y + ny }, { x: p1.x + nx, y: p1.y + ny },
         { x: p1.x - nx, y: p1.y - ny }, { x: p0.x - nx, y: p0.y - ny },
       ];
-      aislesLL.push(quad.map((p) => px2ll(p.x, p.y, cam)));
+      added.push(quad.map((p) => px2ll(p.x, p.y, cam)));
     }
+    if (!added.length) {
+      toast(t("roadNeed2"));
+      roadPoints = [];
+      mode = "idle";
+      setInteractive(false);
+      redraw();
+      return;
+    }
+    aislesLL.push(...added);
     aislesEdited = true;
     roadPoints = [];
     mode = "idle";
@@ -786,6 +896,15 @@
     redraw();
   }
   function finishPolygon() {
+    if (cam && polygonLL.length) {
+      const cleaned = [];
+      for (const ll of polygonLL) {
+        const point = ll2px(ll, cam);
+        if (!cleaned.length || dist(point, ll2px(cleaned[cleaned.length - 1], cam)) > 0.75) cleaned.push(ll);
+      }
+      if (cleaned.length > 1 && dist(ll2px(cleaned[0], cam), ll2px(cleaned[cleaned.length - 1], cam)) <= 0.75) cleaned.pop();
+      polygonLL = cleaned;
+    }
     if (polygonLL.length < 3) { toast(t("need3")); return; }
     closed = true;
     mode = "idle";
@@ -842,8 +961,10 @@
 	  function compute() {
 	    if (!closed || polygonLL.length < 3) { toast(t("needArea")); return; }
 	    if (!cam) { toast(t("noScale")); return; }
+	    const numeric = readNumericInputs(true);
+	    if (!numeric) { clearComputedLayout(); return; }
 	    const singleLane = $("#opl-singlelane").checked;
-	    const aisleWidthM = singleLane ? 3.5 : (parseFloat($("#opl-aw").value) || 6.0);
+	    const aisleWidthM = singleLane ? 3.5 : numeric.aisleWidthM;
 
 	    // --- ZOOM'DAN BAĞIMSIZ sabit referans ölçek ---
 	    // Hesabı her zaman aynı ölçekte yap; sonuç görüntü zoom'una göre değişmesin.
@@ -861,10 +982,10 @@
 	    };
 
 	    const opts = {
-	      stallWidthM: parseFloat($("#opl-sw").value) || 2.5,
-	      stallDepthM: parseFloat($("#opl-sd").value) || 5.0,
+	      stallWidthM: numeric.stallWidthM,
+	      stallDepthM: numeric.stallDepthM,
 	      aisleWidthM,
-	      angleStepDeg: Math.max(5, parseFloat($("#opl-as").value) || 15),
+	      angleStepDeg: numeric.angleStepDeg,
 	      gates: gatesLL.map((g) => ({ type: g.type, point: toL(g.ll) })),
 	      backToBack: $("#opl-btb").checked,
 	      fillEmpty: $("#opl-fillempty").checked,
@@ -882,17 +1003,39 @@
       if (r) lastAngleDeg = r.angleDeg;
     }
     const ms = (performance.now() - t0).toFixed(0);
-    if (!r) { toast(t("couldnt")); return; }
+    if (!r) {
+      clearComputedLayout();
+      setStatus(t("invalidArea"));
+      toast(t("invalidArea"));
+      return;
+    }
     // Sonuçları referans çerçeveden coğrafi koordinata çevirerek sakla.
     stallsLL = r.stalls.map((st) => st.map(fromL));
-    stallTypes = classifyStalls(r.stalls, r.angleDeg, mppRef, opts.gates);
+    const classification = classifyStalls(r.stalls, r.angleDeg, mppRef, opts.gates, opts);
+    stallTypes = classification.types;
     aislesLL = r.aisles.map((a) => a.map(fromL));
     const effectiveCount = parkingCount();
-    result = { count: effectiveCount, angleDeg: r.angleDeg, areaM2: r.areaM2, laneM: aisleWidthM, ms };
+    const warnings = r.metadata && Array.isArray(r.metadata.warnings) ? r.metadata.warnings : [];
+    result = {
+      count: effectiveCount,
+      angleDeg: r.angleDeg,
+      areaM2: r.areaM2,
+      laneM: aisleWidthM,
+      ms,
+      classification: classification.metadata,
+      warnings,
+      connectivity: r.metadata && r.metadata.connectivity,
+      gateAccess: r.metadata && r.metadata.connectivity && r.metadata.connectivity.gateAccess
+        ? fromL(r.metadata.connectivity.gateAccess.targetPoint)
+        : null,
+      regionAnglesDeg: r.metadata && r.metadata.regionAnglesDeg,
+    };
     redraw();
     resultEl.style.display = "block";
     renderResult();
-    setStatus(t("computed"));
+    const connected = result.connectivity && result.connectivity.connected === true;
+    const warningText = warnings.map(localizeWarning).join(" ");
+    setStatus(`${t(connected ? "computedConnected" : "computed")}${warningText ? ` ${warningText}` : ""}`);
   }
 
   // ---- Canvas olayları (çizim) ----
@@ -929,6 +1072,8 @@
   canvas.addEventListener("click", (e) => {
 	    if (!cam) return;
 	    if (mode === "draw") {
+	      // dblclick öncesindeki ikinci click aynı köşeyi iki kez eklemesin.
+	      if (e.detail > 1) return;
 	      if (isNearStart({ x: e.clientX, y: e.clientY })) {
 	        finishPolygon();
 	        return;
@@ -938,6 +1083,7 @@
 	      return;
 	    }
     if (mode === "addroad") {
+      if (e.detail > 1) return;
       roadPoints.push(px2ll(e.clientX, e.clientY, cam));
       redraw();
       return;

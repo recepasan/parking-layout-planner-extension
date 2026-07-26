@@ -14,10 +14,10 @@ A browser extension (Chrome/Edge, Manifest V3) that overlays on **Google Maps**,
 - **Real metric scale** — derived from the map zoom via Web Mercator (`156543.03 · cos(lat) / 2^zoom` m/px).
 - **Zoom-independent** — the layout is computed in a fixed reference scale, so you get the **same result at any zoom level**.
 - **Geo-anchored** — the layout stays pinned to the ground when you pan/zoom and across map ↔ satellite (2D).
-- **Smart layout engine** — searches orientations and phases, then does **regional decomposition** so thin strips and concave/L-shaped areas get filled instead of left empty. Every stall opens onto a connected drive aisle.
+- **Smart layout engine** — searches orientations and phases, then does **regional decomposition** so thin strips and concave/L-shaped areas get filled instead of left empty. Disconnected aisle components are pruned, so every retained stall opens onto the one verified connected network.
 - **Editable roads** — add a **bendable** road, move/resize a road, or delete one; stalls re-flow around your roads.
 - **Gates** — mark entry/exit points; accessible stalls cluster near the entrance, and an access lane is drawn from each gate.
-- **Site-plan rendering** — asphalt, thin white "comb" stall lines, one-way flow arrows, lane dimension labels, accessible (blue), EV (green) and landscape-island markers.
+- **Site-plan rendering** — asphalt, thin white "comb" stall lines, one-way flow arrows, lane dimension labels, accessible (blue), EV (green) and landscape-island markers. Accessible/EV counts are **estimated markings within the total capacity**, not additional spaces or a compliance determination.
 - **Bilingual UI (English / Turkish)** with a one-click toggle; defaults to English and remembers your choice.
 
 ## Install (unpacked)
@@ -29,6 +29,18 @@ A browser extension (Chrome/Edge, Manifest V3) that overlays on **Google Maps**,
 5. Open `https://www.google.com/maps` and **reload the tab** — the panel appears top-right.
 
 No build step, no dependencies — plain JavaScript.
+
+### Tests
+
+Run the dependency-free regression suite with Node.js:
+
+```sh
+node --check layout.js
+node --check content.js
+node --test test/*.test.js
+```
+
+The suite covers finite/connected baseline output, concave U/C parcel containment, invalid input rejection, disconnected edited-road gate selection, rotated roads, optional empty-area filling, determinism and metric scale invariance.
 
 ### Panel not showing?
 
@@ -54,9 +66,9 @@ No build step, no dependencies — plain JavaScript.
 
 | Option | Effect |
 | --- | --- |
-| Stall width / depth (m) | Bay dimensions (default 2.5 × 5.0 m). |
-| Aisle (m) | Drive-lane width (default 6.0 m). |
-| Angle step (°) | Orientation search granularity (smaller = finer/slower). |
+| Stall width / depth (m) | Bay dimensions (default 2.5 × 5.0 m; UI ranges 1.8–4.0 × 3.5–9.0 m). |
+| Aisle (m) | Drive-lane width (default 6.0 m; UI range 2.5–15.0 m). |
+| Angle step (°) | Orientation search granularity, 1–45° (smaller = finer/slower). |
 | Back-to-back double | Two rows share each aisle (double-loaded modules). |
 | One-way lane (3.5 m) | Narrower one-way drive lanes. |
 | Fill empty areas | Pack leftover regions (≥ one module wide) with extra rows. Off by default. |
@@ -68,11 +80,14 @@ No build step, no dependencies — plain JavaScript.
   1. tries each orientation + row phase, splitting every aisle row into all maximal segments that fit the polygon (handles concavity), then links them with minimal cross-aisles (union-find spanning);
   2. also computes a **regional decomposition** (largest-rectangle partition, each region laid out with its own orientation/phase) and keeps whichever yields more stalls;
   3. optionally fills remaining empty rectangles;
-  4. adds perimeter stalls only where they directly abut an aisle.
+  4. adds perimeter stalls only where they directly abut an aisle;
+  5. verifies the aisle graph and retains the entry-gate component (or, without an entry, the component serving the most stalls), reporting a localized warning when disconnected components are pruned.
 - `content.js` handles the Google Maps overlay, drawing tools, projection, i18n and rendering.
 
-## Limitations
+## Safety limits and limitations
 
+- Numeric UI inputs are finite and range-checked before computation: stall width 1.8–4.0 m, depth 3.5–9.0 m, aisle 2.5–15.0 m and angle step 1–45°. Invalid values stop computation with an English/Turkish message.
+- The engine has a bounded input/work budget (up to 512 polygon vertices, 300,000 decomposition cells, 2,500 aisles, 20,000 stalls and 2,500,000 guarded work units). Over-budget or invalid/self-intersecting parcels are rejected instead of running unbounded.
 - Strips narrower than ~one module (stall + aisle ≈ 11 m) stay empty — there is no room for both a car and its access lane.
 - 3D/tilted map view can't be aligned with a flat projection; alignment pauses and resumes when you return to 2D.
 - The parcel center is assumed at the viewport center; if a Google side panel is open the projection may shift slightly — use the plain map view.
@@ -95,5 +110,7 @@ Google Maps üzerinde bir parsel çizip **gerçek metre ölçeğinde** verimli b
 4. `google.com/maps`'i aç ve sekmeyi **yenile** → panel sağ üstte çıkar.
 
 **Kullanım:** alanı çiz (**Vertices**/**Freehand**) → *(isteğe bağlı)* kapı/yol/seçenekler → **Compute Layout**.
+
+**Notlar:** Sayısal girdiler gerçekçi aralıklarda doğrulanır ve motorun iş bütçesi sınırlıdır. Bağlantısız yol bileşenleri girişe (giriş yoksa en çok park yerine) göre budanır ve arayüz uyarı gösterir. Erişilebilir/EV adetleri toplam kapasiteye ek değildir; yalnızca toplam içindeki **tahmini işaretli** yerlerdir. Regresyon testleri `node --test test/*.test.js` ile çalıştırılır.
 
 **Panel görünmüyorsa:** "Arama sayfası sonuçlarına erişime izin ver" açık mı kontrol et ve Maps sekmesini yenile.
