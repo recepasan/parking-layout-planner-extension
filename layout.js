@@ -328,23 +328,26 @@ function _layoutSingle(polygon, mpp, opts) {
   // Bir yatay koridor satırını (aisleY) poligon içinde maksimal SEGMENTLERE böler.
   // Konkav/girintili alanda bir satır birden çok parçaya ayrılır; HEPSİ korunur.
   // Her segment kendi park baylarını (alt + üst sıra) taşır.
-  function horizontalSegments(rpoly, aisleY, offX, rgates) {
+  function horizontalSegments(rpoly, aisleY, offX, rgates, singleSide) {
     const { minX, maxX } = _polyBounds(rpoly);
+    const eps = _geomEps(rpoly);
     const segs = [];
     let run = null;
     const close = () => {
       if (run && run.bays.length) { run.x1 = run.lastX + sw; segs.push(run); }
       run = null;
     };
-    for (let x = minX - offX; x + sw <= maxX; x += sw) {
+    for (let x = minX - offX; x + sw <= maxX + eps; x += sw) {
       _spend(budget);
       if (!_rectInsidePoly(x, aisleY, x + sw, aisleY + aw, rpoly)) { close(); continue; }
       if (!run) run = { x0: x, lastX: x, y0: aisleY, y1: aisleY + aw, bays: [] };
       run.lastX = x;
       const lower = { x, y: aisleY - sd };
       const upper = { x, y: aisleY + aw };
-      if (_rectInsidePoly(x, aisleY - sd, x + sw, aisleY, rpoly) && !bayBlockedByGate(lower, rgates)) run.bays.push(lower);
-      if (_rectInsidePoly(x, aisleY + aw, x + sw, aisleY + aw + sd, rpoly) && !bayBlockedByGate(upper, rgates)) run.bays.push(upper);
+      if ((backToBack || singleSide === "lower") &&
+          _rectInsidePoly(x, aisleY - sd, x + sw, aisleY, rpoly) && !bayBlockedByGate(lower, rgates)) run.bays.push(lower);
+      if ((backToBack || singleSide === "upper") &&
+          _rectInsidePoly(x, aisleY + aw, x + sw, aisleY + aw + sd, rpoly) && !bayBlockedByGate(upper, rgates)) run.bays.push(upper);
     }
     close();
     return segs;
@@ -353,14 +356,15 @@ function _layoutSingle(polygon, mpp, opts) {
   // Dikey bağlayıcı yolu (xc'de, genişlik aw) poligon içinde maksimal segmentlere böler.
   function verticalSegments(rpoly, xc) {
     const { minY, maxY } = _polyBounds(rpoly);
+    const eps = _geomEps(rpoly);
     const step = sd;
     const segs = [];
     let y0 = null, lastY = null;
     const close = () => {
-      if (y0 !== null && (lastY + step - y0) >= aw) segs.push({ x0: xc, x1: xc + aw, y0, y1: lastY + step });
+      if (y0 !== null && (lastY + step - y0) >= aw - eps) segs.push({ x0: xc, x1: xc + aw, y0, y1: lastY + step });
       y0 = null; lastY = null;
     };
-    for (let y = minY; y + step <= maxY; y += step) {
+    for (let y = minY; y + step <= maxY + eps; y += step) {
       _spend(budget);
       if (!_rectInsidePoly(xc, y, xc + aw, y + step, rpoly)) { close(); continue; }
       if (y0 === null) y0 = y;
@@ -373,10 +377,11 @@ function _layoutSingle(polygon, mpp, opts) {
   // Dik bağlayıcı için aday x konumları: düzenli aralık + segment uçları + kapılar.
   function connectorXs(rpoly, hsegs, rgates) {
     const { minX, maxX } = _polyBounds(rpoly);
-    if (maxX - minX < aw) return [];
+    const eps = _geomEps(rpoly);
+    if (maxX - minX < aw - eps) return [];
     const snap = Math.max(1, sw * 0.5);
     const set = new Set();
-    const add = (x) => { if (x >= minX && x + aw <= maxX) set.add(Math.round(x / snap) * snap); };
+    const add = (x) => { if (x >= minX - eps && x + aw <= maxX + eps) set.add(Math.round(x / snap) * snap); };
     const spacing = Math.max(aw * 3, (aw + 2 * sd) * 1.4);
     for (let x = minX; x + aw <= maxX; x += spacing) add(x);
     add(maxX - aw);
@@ -387,13 +392,16 @@ function _layoutSingle(polygon, mpp, opts) {
 
   function candidateStackStarts(rpoly, rgates) {
     const { minY, maxY } = _polyBounds(rpoly);
+    const eps = _geomEps(rpoly);
     const moduleDepth = aw + (backToBack ? 2 * sd : sd);
     const span = maxY - minY;
-    if (span < aw) return [];
+    if (span < aw - eps) return [];
 
-    const values = new Set();
+    const values = new Map();
     const add = (y) => {
-      if (y >= minY && y + aw <= maxY) values.add(Math.round(y * 1000) / 1000);
+      if (y < minY - eps || y + aw > maxY + eps) return;
+      const key = Math.round(y * 1000);
+      if (!values.has(key)) values.set(key, y);
     };
 
     add(minY);
@@ -410,22 +418,23 @@ function _layoutSingle(polygon, mpp, opts) {
     const steps = 8;
     const phaseSpan = Math.min(moduleDepth, Math.max(0, span - aw));
     for (let i = 0; i <= steps; i++) add(minY + (phaseSpan * i) / steps);
-    return Array.from(values);
+    return Array.from(values.values());
   }
 
   // Çok-segmentli yatay koridorlar üretir, ardından AYRI segmentleri birleştiren
   // minimal dik bağlayıcılarla (union-find spanning) bağlı bir sürüş ağı kurar.
   // Konkav/girintili alanlarda her parça korunur; tek koridorluya da düşebilir.
-  function generateStack(rpoly, startY, offX, rgates) {
+  function generateStack(rpoly, startY, offX, rgates, singleSide) {
     const { minY, maxY } = _polyBounds(rpoly);
+    const eps = _geomEps(rpoly);
     const moduleDepth = aw + (backToBack ? 2 * sd : sd);
 
     const hsegs = [];
-    for (let y = startY; y + aw <= maxY; y += moduleDepth) {
-      for (const s of horizontalSegments(rpoly, y, offX, rgates)) hsegs.push(s);
+    for (let y = startY; y + aw <= maxY + eps; y += moduleDepth) {
+      for (const s of horizontalSegments(rpoly, y, offX, rgates, singleSide)) hsegs.push(s);
     }
-    for (let y = startY - moduleDepth; y >= minY; y -= moduleDepth) {
-      for (const s of horizontalSegments(rpoly, y, offX, rgates)) hsegs.push(s);
+    for (let y = startY - moduleDepth; y >= minY - eps; y -= moduleDepth) {
+      for (const s of horizontalSegments(rpoly, y, offX, rgates, singleSide)) hsegs.push(s);
     }
     if (!hsegs.length) return { count: 0, bays: [], aisles: [] };
 
@@ -600,23 +609,56 @@ function _layoutSingle(polygon, mpp, opts) {
     return layout.count * 100000 - aisleLength - gatePenalty * 250;
   }
 
-  // Açı + koridor fazı (startY) + x-fazı taraması. Arama sırasında yalnızca iç
-  // ağ skorlanır (hızlı); çevre bayları yalnızca KAZANAN düzene bir kez eklenir.
+  // Açı + koridor fazı (startY) + x-fazı taraması. Düzenli açı adımına
+  // ek olarak parselin en uzun kenarlarının gerçek doğrultularını da dene.
+  // Kadastro parselleri çoğu zaman 10° ızgaraya hizalı değildir; örneğin 5°
+  // dönük bir dikdörtgeni yalnız 0°/10° ile denemek tam modül sıralarını
+  // kaybettirir ve kullanılabilir alanın büyük bölümünü boş bırakır.
   let best = null;
   const OX = 3;
-  for (let aDeg = 0; aDeg < 180; aDeg += opts.angleStepDeg) {
+  const angleCandidates = [];
+  const addAngle = (value) => {
+    let angle = value % 180;
+    if (angle < 0) angle += 180;
+    angle = Math.round(angle * 1000000) / 1000000;
+    if (angle >= 180) angle = 0;
+    const duplicate = angleCandidates.some((existing) => {
+      const delta = Math.abs(existing - angle);
+      return Math.min(delta, 180 - delta) < 0.01;
+    });
+    if (!duplicate) angleCandidates.push(angle);
+    return !duplicate;
+  };
+  for (let angle = 0; angle < 180; angle += opts.angleStepDeg) addAngle(angle);
+  const edgeAngles = [];
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i], b = polygon[(i + 1) % polygon.length];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    if (length >= sw * 2) edgeAngles.push({ length, angle: Math.atan2(dy, dx) * 180 / Math.PI });
+  }
+  edgeAngles.sort((a, b) => b.length - a.length);
+  let addedEdgeAngles = 0;
+  for (const edge of edgeAngles) {
+    if (addAngle(edge.angle) && ++addedEdgeAngles >= 12) break;
+  }
+
+  for (const aDeg of angleCandidates) {
     _spend(budget, polygon.length);
     const ang = (aDeg * Math.PI) / 180;
     const rpoly = polygon.map((p) => _rotate(p, -ang, c));
     const rgates = gates.map((g) => ({ type: g.type, point: _rotate(g.point, -ang, c) }));
-    for (const startY of candidateStackStarts(rpoly, rgates)) {
-      for (let ix = 0; ix < OX; ix++) {
-        const offX = (sw * ix) / OX;
-        const base = generateStack(rpoly, startY, offX, rgates);
-        if (!base.count) continue;
-        const score = scoreLayout(base, rgates);
-        if (!best || score > best.score) {
-          best = { score, ang, aDeg, rpoly, rgates, offX, base };
+    const sideCandidates = backToBack ? ["both"] : ["lower", "upper"];
+    for (const singleSide of sideCandidates) {
+      for (const startY of candidateStackStarts(rpoly, rgates)) {
+        for (let ix = 0; ix < OX; ix++) {
+          const offX = (sw * ix) / OX;
+          const base = generateStack(rpoly, startY, offX, rgates, singleSide);
+          if (!base.count) continue;
+          const score = scoreLayout(base, rgates);
+          if (!best || score > best.score) {
+            best = { score, ang, aDeg, rpoly, rgates, offX, base };
+          }
         }
       }
     }

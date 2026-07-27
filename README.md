@@ -88,7 +88,7 @@ TKGM v1 deliberately accepts only one simple `Polygon` exterior ring. `MultiPoly
 
 - Geometry is stored as latitude/longitude and re-projected each frame, so the overlay is **geo-anchored**.
 - The layout engine (`layout.js`) works in a fixed metric frame and:
-  1. tries each orientation + row phase, splitting every aisle row into all maximal segments that fit the polygon (handles concavity), then links them with minimal cross-aisles (union-find spanning);
+  1. tries the configured orientation grid **plus the longest actual parcel-edge directions**, then searches row phases; each aisle row is split into all maximal segments that fit the polygon, while single-loaded mode evaluates the upper/lower side independently instead of generating overlapping duplicate rows;
   2. also computes a **regional decomposition** (largest-rectangle partition, each region laid out with its own orientation/phase) and keeps whichever yields more stalls;
   3. optionally fills remaining empty rectangles;
   4. adds perimeter stalls only where they directly abut an aisle;

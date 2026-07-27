@@ -213,6 +213,61 @@
     return { type: "Feature", properties: { kind }, geometry };
   }
 
+  function pointSegmentDistance(point, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const t = lengthSquared
+      ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared))
+      : 0;
+    return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
+  }
+
+  function aisleCenterline(quad) {
+    const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const side01 = distance(quad[0], quad[1]) + distance(quad[3], quad[2]);
+    const side03 = distance(quad[0], quad[3]) + distance(quad[1], quad[2]);
+    return side01 >= side03
+      ? {
+          a: { x: (quad[0].x + quad[3].x) / 2, y: (quad[0].y + quad[3].y) / 2 },
+          b: { x: (quad[1].x + quad[2].x) / 2, y: (quad[1].y + quad[2].y) / 2 },
+        }
+      : {
+          a: { x: (quad[0].x + quad[1].x) / 2, y: (quad[0].y + quad[1].y) / 2 },
+          b: { x: (quad[3].x + quad[2].x) / 2, y: (quad[3].y + quad[2].y) / 2 },
+        };
+  }
+
+  // Google canvas adaptörüyle aynı "tarak" görünümü: en yakın koridor
+  // merkezine bakan stall kenarını atla, kalan üç kenarı tek LineString yap.
+  function openStallLine(stall, aisleLines, fromLocal) {
+    if (!Array.isArray(stall) || stall.length !== 4) return null;
+    let openEdge = -1;
+    let bestDistance = Infinity;
+    for (let edge = 0; edge < 4; edge++) {
+      const a = stall[edge], b = stall[(edge + 1) % 4];
+      if (!a || !b || !Number.isFinite(a.x) || !Number.isFinite(a.y) ||
+          !Number.isFinite(b.x) || !Number.isFinite(b.y)) return null;
+      const midpoint = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      for (const aisle of aisleLines) {
+        const distance = pointSegmentDistance(midpoint, aisle.a, aisle.b);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          openEdge = edge;
+        }
+      }
+    }
+    if (openEdge < 0) return null;
+    const line = [];
+    let index = (openEdge + 1) % 4;
+    line.push(fromLocal(stall[index]));
+    for (let step = 0; step < 3; step++) {
+      index = (index + 1) % 4;
+      line.push(fromLocal(stall[index]));
+    }
+    return line.every((coordinate) => Array.isArray(coordinate) &&
+      Number.isFinite(coordinate[0]) && Number.isFinite(coordinate[1])) ? line : null;
+  }
+
   function buildLayoutFeatureCollection(parcel, projection, layout, classification) {
     if (!parcel || !projection || !layout || !Array.isArray(layout.stalls) || !Array.isArray(layout.aisles)) return null;
     const parcelRing = parcel.ring.map((coordinate) => coordinate.slice());
@@ -235,10 +290,25 @@
     const types = classification && Array.isArray(classification.types) && classification.types.length === layout.stalls.length
       ? classification.types
       : layout.stalls.map(() => "standard");
-    for (const kind of ["standard", "accessible", "ev"]) {
+
+    // Renkli türlerin yalnız dolgusu poligondur; beyaz sınırları aşağıdaki ortak
+    // açık çizgi katmanında çizilir, böylece koridor kenarında çift çizgi oluşmaz.
+    for (const kind of ["accessible", "ev"]) {
       const quads = layout.stalls.filter((_, index) => types[index] === kind);
       if (!addQuads(kind, quads)) return null;
     }
+    const aisleLines = layout.aisles.map(aisleCenterline);
+    const stallLines = [];
+    for (let index = 0; index < layout.stalls.length; index++) {
+      if (types[index] === "landscape") continue;
+      const line = openStallLine(layout.stalls[index], aisleLines, projection.fromLocal);
+      if (!line) return null;
+      stallLines.push(line);
+    }
+    if (stallLines.length) {
+      features.push(feature("stall-lines", { type: "MultiLineString", coordinates: stallLines }));
+    }
+
     const landscapeCoordinates = layout.stalls
       .filter((_, index) => types[index] === "landscape")
       .map((quad) => projection.fromLocal(centroid(quad)));

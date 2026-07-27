@@ -12,7 +12,7 @@
   const MAX_RENDER_COORDINATES = 120000;
   const MAX_RENDER_POLYGONS = 22501;
   const ALLOWED_PROPERTIES = ["adaNo", "parselNo", "ozet", "zeminId", "parselId"];
-  const ALLOWED_KINDS = new Set(["parcel", "aisle", "standard", "accessible", "ev", "landscape"]);
+  const ALLOWED_KINDS = new Set(["parcel", "aisle", "standard", "stall-lines", "accessible", "ev", "landscape"]);
 
   let channel = null;
   let constants = null;
@@ -139,19 +139,28 @@
       const type = item.geometry.type;
       if (type === "Polygon") polygons += 1;
       else if (type === "MultiPolygon") polygons += Array.isArray(item.geometry.coordinates) ? item.geometry.coordinates.length : 0;
-      else if (type !== "MultiPoint") return false;
+      else if (type !== "MultiPoint" && type !== "MultiLineString") return false;
       if (polygons > MAX_RENDER_POLYGONS || !walk(item.geometry.coordinates)) return false;
     }
     return true;
   }
 
   function styleFor(feature) {
-    const common = { pane: paneName, renderer, interactive: false };
+    const common = {
+      pane: paneName,
+      renderer,
+      interactive: false,
+      smoothFactor: 0,
+      lineCap: "butt",
+      lineJoin: "miter",
+    };
     switch (feature.properties.kind) {
       case "parcel": return Object.assign(common, { color: "#facc15", weight: 2.5, fillColor: "#4b5563", fillOpacity: 0.62 });
       case "aisle": return Object.assign(common, { color: "#d1d5db", weight: 0.8, fillColor: "#737b85", fillOpacity: 0.9 });
-      case "accessible": return Object.assign(common, { color: "#ffffff", weight: 1, fillColor: "#2563eb", fillOpacity: 0.82 });
-      case "ev": return Object.assign(common, { color: "#ffffff", weight: 1, fillColor: "#22c55e", fillOpacity: 0.78 });
+      case "stall-lines": return Object.assign(common, { color: "#ffffff", weight: 1, fill: false });
+      case "accessible": return Object.assign(common, { stroke: false, weight: 0, fill: true, fillColor: "#2563eb", fillOpacity: 0.82 });
+      case "ev": return Object.assign(common, { stroke: false, weight: 0, fill: true, fillColor: "#22c55e", fillOpacity: 0.78 });
+      case "landscape": return Object.assign(common, { color: "#14532d", weight: 1, fill: true, fillColor: "#22c55e", fillOpacity: 0.95 });
       default: return Object.assign(common, { color: "#ffffff", weight: 1, fillOpacity: 0 });
     }
   }
@@ -180,6 +189,9 @@
         pane: paneName,
         renderer,
         interactive: false,
+        smoothFactor: 0,
+        lineCap: "butt",
+        lineJoin: "miter",
         style: styleFor,
         pointToLayer: function (feature, latlng) {
           return Leaflet.circleMarker(latlng, {

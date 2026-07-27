@@ -109,7 +109,14 @@ test('selected TKGM parcel computes locally and converts to bounded GeoJSON over
   assert.equal(collection.type, 'FeatureCollection');
   assert.equal(collection.features[0].properties.kind, 'parcel');
   assert.ok(collection.features.some((item) => item.properties.kind === 'aisle'));
-  assert.ok(collection.features.some((item) => item.properties.kind === 'standard'));
+  const stallLines = collection.features.find((item) => item.properties.kind === 'stall-lines');
+  assert.ok(stallLines);
+  assert.equal(stallLines.geometry.type, 'MultiLineString');
+  assert.equal(stallLines.geometry.coordinates.length, classification.metadata.totalParking);
+  for (const line of stallLines.geometry.coordinates) {
+    assert.equal(line.length, 4, 'an open comb stall must contain exactly three segments');
+    assert.notDeepEqual(line[0], line[line.length - 1], 'aisle-facing edge must remain open');
+  }
   for (const item of collection.features) {
     everyCoordinate(item.geometry.coordinates, ([lng, lat]) => {
       assert.ok(Number.isFinite(lng) && lng >= -180 && lng <= 180);

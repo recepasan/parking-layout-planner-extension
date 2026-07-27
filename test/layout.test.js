@@ -305,7 +305,7 @@ test('empty edited-road output and parcels too narrow for an aisle return null',
   assert.equal(computeBestLayout(rectangle(100, 2), 1, { ...OPTIONS, angleStepDeg: 90 }), null);
 });
 
-test('fillEmpty adds real capacity on a leftover region and remains finalized', () => {
+test('single-loaded mode searches each aisle side without duplicate-row pruning', () => {
   const polygon = [
     { x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 20 },
     { x: 20, y: 20 }, { x: 20, y: 60 }, { x: 0, y: 60 },
@@ -332,4 +332,31 @@ test('vertex and guarded work limits reject pathological public inputs', () => {
     ...OPTIONS,
     angleStepDeg: 180,
   }), null);
+});
+
+function rotatePolygon(polygon, angleDeg, center = { x: 50, y: 25 }) {
+  const angle = angleDeg * Math.PI / 180;
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  return polygon.map((point) => {
+    const x = point.x - center.x, y = point.y - center.y;
+    return {
+      x: center.x + x * cos - y * sin,
+      y: center.y + x * sin + y * cos,
+    };
+  });
+}
+
+test('long parcel-edge angles prevent large capacity loss between angle-step samples', () => {
+  const basePolygon = rectangle(100, 50);
+  const rotatedPolygon = rotatePolygon(basePolygon, 3);
+  const base = computeBestLayout(basePolygon, 1, { ...OPTIONS, angleStepDeg: 10 });
+  const rotated = computeBestLayout(rotatedPolygon, 1, { ...OPTIONS, angleStepDeg: 10 });
+  finiteLayout(base);
+  finiteLayout(rotated);
+  assert.equal(base.count, 222);
+  assert.ok(rotated.count >= 210, `edge-aligned candidate should retain capacity, got ${rotated.count}`);
+  assert.ok(rotated.count >= base.count * 0.94);
+  assert.ok(Math.abs(rotated.angleDeg - 3) < 1e-6 || Math.abs(rotated.angleDeg - 93) < 1e-6);
+  assert.equal(rotated.metadata.connectivity.connected, true);
+  assertAllQuadsInside(rotated, rotatedPolygon);
 });
